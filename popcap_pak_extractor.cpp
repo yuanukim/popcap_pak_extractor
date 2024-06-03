@@ -29,6 +29,7 @@
 #include <array>
 #include <memory>
 #include <cstdint>
+#include <cstdlib>
 #include <Windows.h>
 
 namespace fs = std::filesystem;
@@ -175,8 +176,14 @@ void create_files(PakPtr ptr) {
     }
 }
 
-int main() {
-    auto ptr = extract_pak_file("./your_file.pak");
+int main(int argc, char* argv[]) {
+    if (argc != 2) {
+        std::cerr << "Usage: " << argv[0] << " <.pak file path>\n";
+        return EXIT_FAILURE;
+    }
+
+    auto ptr = extract_pak_file(argv[1]);
     write_file_list(ptr, "./file_list.txt");
     create_files(ptr);
+    return EXIT_SUCCESS;
 }
