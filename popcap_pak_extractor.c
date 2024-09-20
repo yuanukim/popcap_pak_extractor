@@ -224,7 +224,7 @@ void save_file_name_list(void) {
         cursor = cursor->next;
     }
 
-    printf("[%s %s] file names are saved at `%s`\n", __DATE__, __TIME__, FILE_NAME_LIST_SAV_PATH);
+    printf("[%s %s] file names are saved at \".\\%s\"\n", __DATE__, __TIME__, FILE_NAME_LIST_SAV_PATH);
 }
 
 char* construct_complete_path(struct FileAttribute* attr) {
@@ -330,6 +330,8 @@ void save_body(void) {
         parse_and_save_one_file(attr);
         attr = attr->next;
     }
+
+    printf("[%s %s] files are saved at \".\\%s\"\n", __DATE__, __TIME__, filesSaveRootDir);
 }
 
 int main(int argc, char* argv[]) {
