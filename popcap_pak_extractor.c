@@ -12,7 +12,6 @@
 
 #define BUFFER_LEN   8192
 #define FILE_NAME_LIST_SAV_PATH   "pak_file_name_list.txt"
-#define BODY_SAV_ROOT_DIR   "pak_file_extract_dir\\"
 
 struct FileAttribute {
     char* fileName;
@@ -31,6 +30,7 @@ struct Header {
 FILE* pakFile;
 FILE* filenameListSav;
 char rwBuf[BUFFER_LEN];
+char filesSaveRootDir[MAX_PATH];
 struct Header header;
 
 /*
@@ -47,9 +47,32 @@ void log_error_die(const char* fmt, ...) {
     exit(EXIT_FAILURE);
 }
 
-void init_resources(const char* pakFilePath) {
+void process_files_save_dir(const char* dir) {
+    UINT32 len = 0;
+
+    while (*dir != '\0') {
+        filesSaveRootDir[len] = *dir;
+        
+        ++dir;
+        ++len;
+    }
+
+    if (filesSaveRootDir[len - 1] == '/') {
+        filesSaveRootDir[len - 1] = '\\';
+    }
+    else if (filesSaveRootDir[len - 1] != '\\') {
+        filesSaveRootDir[len] = '\\';
+        ++len;
+    }
+
+    filesSaveRootDir[len] = '\0';
+}
+
+void init_resources(const char* pakFilePath, const char* filesSaveDir) {
     header.attrListHead = NULL;
     header.attrListTail = NULL;
+
+    process_files_save_dir(filesSaveDir);
 
     pakFile = fopen(pakFilePath, "rb");
     if (pakFile == NULL) {
@@ -214,7 +237,7 @@ char* construct_complete_path(struct FileAttribute* attr) {
     }
 
     pathCursor = completePath;
-    temp = BODY_SAV_ROOT_DIR;
+    temp = filesSaveRootDir;
     while (*temp != '\0') {
         *pathCursor = *temp;
 
@@ -310,11 +333,11 @@ void save_body(void) {
 }
 
 int main(int argc, char* argv[]) {
-    if (argc != 2) {
-        log_error_die("usage: %s main.pak\n", argv[0]);
+    if (argc != 3) {
+        log_error_die("usage: %s main.pak extract_dir\n", argv[0]);
     }
 
-    init_resources(argv[1]);
+    init_resources(argv[1], argv[2]);
     parse_header();
     save_file_name_list();
     save_body();
