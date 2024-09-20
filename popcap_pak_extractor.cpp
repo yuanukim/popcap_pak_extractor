@@ -18,25 +18,29 @@
  *       record.filesize bytes - File data
  *   end
  * 
- * This project only works for windows. try to compile it with at least C++17.
+ * This project only works for windows platform. please try to compile it with at least C++17.
 */
 #define WIN32_LEAN_AND_MEAN
 
+#include <Windows.h>
+
 #include <iostream>
+#include <cstdio>
+#include <iomanip>
+#include <algorithm>
 #include <filesystem>
 #include <string>
 #include <fstream>
+#include <system_error>
 #include <vector>
 #include <array>
 #include <cstdint>
-#include <Windows.h>
 
 namespace fs = std::filesystem;
 
 using uchar = unsigned char;
 
 struct FileAttr {
-    uchar flag;
     std::string fileName;
     uint32_t fileSize;
     FILETIME lastWriteTime;   // microsoft windows.
@@ -50,99 +54,109 @@ struct PakHeader {
 
 class PakFileExtractor {
     std::ifstream pakFile;
-    PakHeader pakHeader;
-    std::array<char, 8192> buf;
-    std::array<uchar, 8192> ubuf;
+    PakHeader header;
 
-    uchar decode_one_pak_byte(char c) {
+    template<typename CharType>
+    uchar decode_one_pak_byte(CharType c) {
         return static_cast<uchar>(c ^ 0xf7);
     }
 
-    bool is_pak_header_end(uchar flag) {
-        return flag == 0x80;
+    template<typename T>
+    void decode_bytes(T* data, size_t len) {
+        for (size_t i = 0; i < len; ++i) {
+            data[i] = decode_one_pak_byte(data[i]);
+        }
+    }
+
+    bool is_pak_header_end() {
+        char c;
+        pakFile.read(&c, 1);
+        return decode_one_pak_byte(c) == 0x80;
     }
 
     // parse 4 btyes for magic, must be 0xc0, 0x4a, 0xc0, 0xba.
     void parse_magic() {
-        pakFile.read(buf.data(), 4);
-        for (size_t i = 0; i < 4; ++i) {
-            pakHeader.magic[i] = decode_one_pak_byte(buf[i]);
-        }
+        pakFile.read((char*)(header.magic.data()), header.magic.size());
+        decode_bytes(header.magic.data(), header.magic.size());
     }
 
     // parse 4 bytes for version, must be all 0.
     void parse_version() {
-        pakFile.read(buf.data(), 4);
-        for (size_t i = 0; i < 4; ++i) {
-            pakHeader.version[i] = decode_one_pak_byte(buf[i]);
-        }
-    }
-
-    // parse 1 byte for flag.
-    void parse_file_flag(FileAttr& f) {
-        pakFile.read(buf.data(), 1);
-        f.flag = decode_one_pak_byte(buf[0]);
+        pakFile.read((char*)(header.version.data()), header.version.size());
+        decode_bytes(header.version.data(), header.version.size());
     }
 
     // parse 1 byte for file name's length, then parse the file name.
-    void parse_file_name(FileAttr& f) {        
-        pakFile.read(buf.data(), 1);
-        uint8_t filenameLength = static_cast<uint8_t>(decode_one_pak_byte(buf[0]));
+    void parse_file_name(FileAttr& f) {
+        char c;
+        pakFile.read(&c, 1);
+        uint32_t filenameLength = (uint32_t)(decode_one_pak_byte(c));
 
-        pakFile.read(buf.data(), filenameLength);
-        for (uint8_t i = 0; i < filenameLength; ++i) {
-            f.fileName += static_cast<char>(decode_one_pak_byte(buf[i]));
-        }
+        f.fileName.resize(filenameLength);
+        pakFile.read(f.fileName.data(), filenameLength);
+        decode_bytes(f.fileName.data(), filenameLength);
     }
 
     // parse 4 bytes for file size. 
     void parse_file_size(FileAttr& f) {
-        pakFile.read(buf.data(), 4);
-
-        for (int i = 0; i < 4; ++i) {
-            ubuf[i] = decode_one_pak_byte(buf[i]);
-        }
-
-        f.fileSize = *(uint32_t*)(ubuf.data());
+        pakFile.read((char*)(&(f.fileSize)), 4);
+        decode_bytes((char*)(&(f.fileSize)), 4);
     }
 
     void parse_file_last_write_time(FileAttr& f) {
-        constexpr size_t fileTimeStructSize = sizeof(FILETIME);
-
-        pakFile.read(buf.data(), fileTimeStructSize);
-        for (size_t i = 0; i < fileTimeStructSize; ++i) {
-            ubuf[i] = decode_one_pak_byte(buf[i]);
-        }
-
-        f.lastWriteTime = *(FILETIME*)(ubuf.data());
+        pakFile.read((char*)(&(f.lastWriteTime)), sizeof(FILETIME));
+        decode_bytes((char*)(&(f.lastWriteTime)), sizeof(FILETIME));
     }
 
     void parse_each_file_attr() {
-        while (true) {
-            FileAttr f;
-
-            parse_file_flag(f);
-            if (is_pak_header_end(f.flag)) {
+        while (!pakFile.eof()) {
+            if (is_pak_header_end()) {
                 break;
             }
         
+            FileAttr f;
             parse_file_name(f);
             parse_file_size(f);
             parse_file_last_write_time(f);
             
-            pakHeader.fileAttrList.emplace_back(f);
+            header.fileAttrList.emplace_back(f);
         }
     }
 
-    void parse_and_save_one_file(FileAttr const& attr, fs::path const& p) {
+    void save_filename_list() {
+        constexpr const char* pak_filename_list_path = "./pak_filename_list.txt";
+        std::ofstream out{ pak_filename_list_path };
+
+        for (auto& attr : header.fileAttrList) {
+            out << attr.fileName << ", " << attr.fileSize << "\n";
+        }
+
+        std::cout << "Miku> pak filename list has been saved at \"" << pak_filename_list_path << "\"\n";
+    }
+
+    template<size_t N>
+    void parse_and_save_one_file(FileAttr const& attr, fs::path const& p, std::array<char, N>& buf) {
         fs::path parentPath = p.parent_path();
         if (!fs::exists(parentPath)) {
             fs::create_directories(parentPath);
         }
 
-        std::ofstream out{ p, std::ios::binary };
         uint32_t fileSize = attr.fileSize;
         uint32_t readLen;
+
+        HANDLE outFile = CreateFile(p.string().c_str(), 
+                                    GENERIC_WRITE,
+                                    0,
+                                    nullptr,
+                                    CREATE_NEW,
+                                    FILE_ATTRIBUTE_NORMAL,
+                                    nullptr);
+
+        if (outFile == INVALID_HANDLE_VALUE) {
+            std::error_code ec(GetLastError(), std::system_category());
+            std::cerr << "Miku> CreateFile() failed, " << ec.message() << "\n";
+            throw std::system_error{ ec };
+        }                                    
 
         while (fileSize > 0) {
             if (fileSize < buf.size()) {
@@ -153,22 +167,24 @@ class PakFileExtractor {
             }
 
             readLen = pakFile.gcount();
-            for (uint32_t i = 0; i < readLen; ++i) {
-                ubuf[i] = decode_one_pak_byte(buf[i]);
-            }
-
-            out.write(reinterpret_cast<const char*>(ubuf.data()), readLen);
+            decode_bytes(buf.data(), readLen);
+            WriteFile(outFile, buf.data(), readLen, nullptr, nullptr);
             fileSize -= readLen;
         }
+
+        SetFileTime(outFile, nullptr, nullptr, &(attr.lastWriteTime));
+        CloseHandle(outFile);    
     }
 
-    void parse_and_save_files() {
-        fs::path root_dir{ "./popcap_pak_extract_result" };
+    void parse_and_save_files(std::string const& saveRootDir) {
+        fs::path root_dir{ saveRootDir };
+        std::array<char, 8192> buf;
 
-        for (const FileAttr& attr : pakHeader.fileAttrList) {
-            parse_and_save_one_file(attr, root_dir / attr.fileName);
+        for (const FileAttr& attr : header.fileAttrList) {
+            parse_and_save_one_file(attr, root_dir / attr.fileName, buf);
         }
 
+        std::cout << "Miku> all extracted files are saved at \"" << saveRootDir << "\"\n";
         pakFile.close();
     }
 public:
@@ -176,25 +192,23 @@ public:
         : pakFile{ pakFilePath, std::ios::binary } 
     {}
 
-    const PakHeader& getPakHeader() const {
-        return pakHeader;
-    }
-
-    void operator()() {
+    void operator()(std::string const& saveRootDir) {
         parse_magic();
         parse_version();
         parse_each_file_attr();
-        parse_and_save_files();
+
+        save_filename_list();
+        parse_and_save_files(saveRootDir);
     }
 };
 
 int main(int argc, char* argv[]) {
-    if (argc != 2) {
-        std::cerr << "Usage: " << argv[0] << " <.pak file path>\n";
+    if (argc != 3) {
+        std::cerr << "Miku> usage is " << argv[0] << " main.pak save_dir\n";
         return 0;
     }
 
     PakFileExtractor extractor{ argv[1] };
-    extractor();
+    extractor(argv[2]);
     return 0;
 }
