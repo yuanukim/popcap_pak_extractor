@@ -142,7 +142,7 @@ class PakFileExtractor {
         uint32_t fileSize = attr.fileSize;
         uint32_t readLen;
 
-        // not very seriously here, just ignore to check the return value.
+        // normally, this call should be success.
         HANDLE outFile = CreateFile(p.string().c_str(), 
                                     GENERIC_WRITE,
                                     0,
