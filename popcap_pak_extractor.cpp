@@ -142,19 +142,14 @@ class PakFileExtractor {
         uint32_t fileSize = attr.fileSize;
         uint32_t readLen;
 
+        // not very seriously here, just ignore to check the return value.
         HANDLE outFile = CreateFile(p.string().c_str(), 
                                     GENERIC_WRITE,
                                     0,
                                     nullptr,
                                     CREATE_NEW,
                                     FILE_ATTRIBUTE_NORMAL,
-                                    nullptr);
-
-        if (outFile == INVALID_HANDLE_VALUE) {
-            std::error_code ec(GetLastError(), std::system_category());
-            std::cerr << "Miku> CreateFile() failed, " << ec.message() << "\n";
-            throw std::system_error{ ec };
-        }                                    
+                                    nullptr);                                   
 
         while (fileSize > 0) {
             if (fileSize < buf.size()) {
