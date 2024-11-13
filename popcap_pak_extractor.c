@@ -3,131 +3,144 @@
 #include <windows.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <stdarg.h>
+
+typedef struct Allocator     Allocator;
+typedef struct FileAttr      FileAttr;
+typedef struct FileAttrList  FileAttrList;
+typedef struct PakHeader     PakHeader;
+typedef struct Resource      Resource;
+
+#define MAX_BLOCK_SIZE  328
+#define MAX_FILE_NUM    16384
+
+#define BUFFER_SIZE  8192
 
 #define BYTES_OF_MAGIC       4
 #define BYTES_OF_VERSION     4
 #define BYTES_OF_FILE_SIZE   4
-#define BYTES_OF_FILETIME    sizeof(FILETIME)
+#define BYTES_OF_FILE_TIME   sizeof(FILETIME)
 
-#define BUFFER_LEN   8192
-#define FILE_NAME_LIST_SAV_PATH   "pak_file_name_list.txt"
+struct Allocator {
+    char* buf;
+    size_t used;
+    size_t maxLen;
+};
 
-struct FileAttribute {
+struct FileAttr {
     char* fileName;
     UINT32 fileSize;
     FILETIME lastWriteTime;
-    struct FileAttribute* next;
+    FileAttr* next;
 };
 
-struct Header {
-    unsigned char magic[BYTES_OF_MAGIC];
-    unsigned char version[BYTES_OF_VERSION];
-    struct FileAttribute* attrListHead;
-    struct FileAttribute* attrListTail;
+struct FileAttrList {
+    FileAttr* head;
+    FileAttr* tail;
+    size_t length;
 };
 
-FILE* pakFile;
-FILE* filenameListSav;
-char rwBuf[BUFFER_LEN];
-char filesSaveRootDir[MAX_PATH];
-struct Header header;
+struct PakHeader {
+    UCHAR magic[BYTES_OF_MAGIC];
+    UCHAR version[BYTES_OF_VERSION];
+    FileAttrList flist;
+};
 
-/*
-    if some error occurs, log something and exit the program.
-*/
-void log_error_die(const char* fmt, ...) {
-    va_list args;
+struct Resource {
+    Allocator allocator;
+    FILE* pakFile;
+    FILE* filenameListSav;
+};
 
-    fprintf(stderr, "[%s %s] ", __DATE__, __TIME__);
-    va_start(args, fmt);
-    vfprintf(stderr, fmt, args);
-    va_end(args);
+BOOL allocator_init(Allocator* allocator, size_t size) {
+    allocator->buf = (char*)malloc(size);
+    if (allocator->buf == NULL) {
+        return FALSE;
+    }
 
-    exit(EXIT_FAILURE);
+    allocator->used = 0;
+    allocator->maxLen = size;
+    return TRUE;
 }
 
-void process_files_save_dir(const char* dir) {
-    UINT32 len = 0;
-
-    while (*dir != '\0') {
-        filesSaveRootDir[len] = *dir;
-        
-        ++dir;
-        ++len;
-    }
-
-    if (filesSaveRootDir[len - 1] == '/') {
-        filesSaveRootDir[len - 1] = '\\';
-    }
-    else if (filesSaveRootDir[len - 1] != '\\') {
-        filesSaveRootDir[len] = '\\';
-        ++len;
-    }
-
-    filesSaveRootDir[len] = '\0';
+void allocator_free(Allocator* allocator) {
+    free(allocator->buf);
+    allocator->maxLen = allocator->used = 0;
 }
 
-void init_resources(const char* pakFilePath, const char* filesSaveDir) {
-    header.attrListHead = NULL;
-    header.attrListTail = NULL;
-
-    process_files_save_dir(filesSaveDir);
-
-    pakFile = fopen(pakFilePath, "rb");
-    if (pakFile == NULL) {
-        log_error_die("can't open .pak file: `%s`\n", pakFilePath);
+void* alloc_memory(Allocator* allocator, size_t size) {
+    if (allocator->used + size >= allocator->maxLen) {
+        return NULL;
     }
 
-    filenameListSav = fopen(FILE_NAME_LIST_SAV_PATH, "w");
-    if (filenameListSav == NULL) {
-        fclose(pakFile);
-        log_error_die("can't open `%s` to save filename list\n", FILE_NAME_LIST_SAV_PATH);
-    }
+    allocator->used += size;
+    return (void*)(allocator->buf + allocator->used - size);
 }
 
-void destroy_resources(void) {
-    struct FileAttribute* cursor;
-
-    fclose(pakFile);
-    fclose(filenameListSav);
-
-    while (header.attrListHead != NULL) {
-        cursor = header.attrListHead->next;
-        
-        if (header.attrListHead->fileName != NULL) {
-            free(header.attrListHead->fileName);
-        }
-        
-        free(header.attrListHead);
-        header.attrListHead = cursor;
+BOOL resource_init(Resource* res, size_t size, const char* pakFilePath, const char* filenameListSavPath) {
+    if (!allocator_init(&(res->allocator), size)) {
+        return FALSE;
     }
+
+    res->pakFile = fopen(pakFilePath, "rb");
+    if (res->pakFile == NULL) {
+        fprintf(stderr, "[ERROR] `%s` is not a valid pak file\n", pakFilePath);
+        allocator_free(&(res->allocator));
+        return FALSE;
+    }
+
+    res->filenameListSav = fopen(filenameListSavPath, "w");
+    if (res->filenameListSav == NULL) {
+        fprintf(stderr, "[ERROR] `%s` is not a valid save path\n", filenameListSavPath);
+        fclose(res->pakFile);
+        allocator_free(&(res->allocator));
+        return FALSE;
+    }
+
+    return TRUE;
 }
 
-struct FileAttribute* header_add_new_attr(void) {
-    struct FileAttribute* node = (struct FileAttribute*)malloc(sizeof(struct FileAttribute));
-    if (node == NULL) {
-        log_error_die("can't build a new FileAttribute struct, out of memory\n");
+void resource_free(Resource* res) {
+    allocator_free(&(res->allocator));
+    fclose(res->pakFile);
+    fclose(res->filenameListSav);
+}
+
+void* alloc_or_die(Resource* res, size_t size) {
+    void* memory = alloc_memory(&(res->allocator), size);
+    if (memory == NULL) {
+        resource_free(res);
+        fprintf(stderr, "[ERROR] memory is not enough to parse so many files\n");
+        exit(EXIT_FAILURE);
     }
 
-    node->fileName = NULL;
-    node->next = NULL;
+    return memory;
+}
 
-    if (header.attrListHead == NULL) {
-        header.attrListHead = node;
-        header.attrListTail = node;
+void file_attr_list_init(FileAttrList* flist) {
+    flist->head = flist->tail = NULL;
+    flist->length = 0;
+}
+
+void file_attr_list_add(FileAttrList* flist, FileAttr* attr) {
+    attr->next = NULL;
+    flist->length += 1;
+
+    if (flist->head == NULL) {
+        flist->head = flist->tail = attr;
     }
     else {
-        header.attrListTail->next = node;
-        header.attrListTail = node;
+        flist->tail->next = attr;
+        flist->tail = attr;
     }
-
-    return node;
 }
 
+void pak_header_init(PakHeader* header) {
+    file_attr_list_init(&(header->flist));
+}
+
+/***************** parse. ****************/
 #define decode_one_byte(c) \
     (unsigned char)(c ^ 0xf7)
-
 
 #define decode_bytes(fromBuf, toBuf, len) do { \
     UINT32 i = 0; \
@@ -137,124 +150,99 @@ struct FileAttribute* header_add_new_attr(void) {
     } \
 } while(0)
 
-
-/* 
-    magic number must be 0xc0, 0x4a, 0xc0, 0xba. 
-*/
-void parse_magic(void) {
-    fread(header.magic, sizeof(unsigned char), BYTES_OF_MAGIC, pakFile);
-    decode_bytes(header.magic, header.magic, BYTES_OF_MAGIC);
+/* must be 0xc0, 0x4a, 0xc0, 0xba. */
+void parse_magic(Resource* res, PakHeader* header) {
+    fread(header->magic, sizeof(UCHAR), BYTES_OF_MAGIC, res->pakFile);
+    decode_bytes(header->magic, header->magic, BYTES_OF_MAGIC);
 }
 
-/* 
-    version must be 0x00, 0x00, 0x00, 0x00. 
-*/
-void parse_version(void) {
-    fread(header.version, sizeof(unsigned char), BYTES_OF_VERSION, pakFile);
-    decode_bytes(header.version, header.version, BYTES_OF_VERSION);
+/* must be 0x00, 0x00, 0x00, 0x00. */
+void parse_version(Resource* res, PakHeader* header) {
+    fread(header->version, sizeof(UCHAR), BYTES_OF_VERSION, res->pakFile);
+    decode_bytes(header->version, header->version, BYTES_OF_VERSION);
 }
 
-BOOL is_pak_header_end(void) {
-    unsigned char flag;
-    fread(&flag, sizeof(unsigned char), 1, pakFile);
+BOOL reach_pak_header_end(Resource* res) {
+    UCHAR flag;
+    fread(&flag, sizeof(UCHAR), 1, res->pakFile);
     return decode_one_byte(flag) == 0x80;
 }
 
-/*
-    get the filename's length, then read those bytes as filename.
-*/
-void parse_file_name(struct FileAttribute* attr) {
-    unsigned char filenameLenOneByte;
+void parse_file_name(Resource* res, FileAttr* attr) {
+    UCHAR byte;
     UINT32 filenameLen;
 
-    fread(&filenameLenOneByte, sizeof(unsigned char), 1, pakFile);
-    filenameLen = (UINT32)decode_one_byte(filenameLenOneByte);
+    /* get the length of the file name. */
+    fread(&byte, sizeof(UCHAR), 1, res->pakFile);
+    filenameLen = (UINT32)decode_one_byte(byte);
 
-    attr->fileName = (char*)malloc((filenameLen + 1) * sizeof(char));
-    if (attr->fileName == NULL) {
-        log_error_die("can't allocate memory to fill filename\n");
-    }
-
-    fread(attr->fileName, sizeof(char), filenameLen, pakFile);
-    decode_bytes(attr->fileName, attr->fileName, filenameLen);
+    /* get the file name. */
+    attr->fileName = alloc_or_die(res, (filenameLen + 1) * sizeof(char));
     attr->fileName[filenameLen] = '\0';
+    fread(attr->fileName, sizeof(char), filenameLen, res->pakFile);
+    decode_bytes(attr->fileName, attr->fileName, filenameLen);
 }
 
-void parse_file_size(struct FileAttribute* attr) {
-    unsigned char* buf = (unsigned char*)(&(attr->fileSize));
-    fread(buf, sizeof(unsigned char), BYTES_OF_FILE_SIZE, pakFile);
+void parse_file_size(Resource* res, FileAttr* attr) {
+    UCHAR* buf = (UCHAR*)(&(attr->fileSize));
+    
+    fread(buf, sizeof(UCHAR), BYTES_OF_FILE_SIZE, res->pakFile);
     decode_bytes(buf, buf, BYTES_OF_FILE_SIZE);
 }
 
-void parse_file_last_write_time(struct FileAttribute* attr) {
-    unsigned char* buf = (unsigned char*)(&(attr->lastWriteTime));
-    fread(buf, sizeof(unsigned char), BYTES_OF_FILETIME, pakFile);
-    decode_bytes(buf, buf, BYTES_OF_FILETIME);
+void parse_file_last_write_time(Resource* res, FileAttr* attr) {
+    UCHAR* buf = (UCHAR*)(&(attr->lastWriteTime));
+
+    fread(buf, sizeof(UCHAR), BYTES_OF_FILE_TIME, res->pakFile);
+    decode_bytes(buf, buf, BYTES_OF_FILE_TIME);
 }
 
-void parse_all_file_attrs(void) {
-    struct FileAttribute* attr;
+void parse_all_file_attrs(Resource* res, PakHeader* header) {
+    FileAttr* attr;
 
-    while (!feof(pakFile)) {
-        if (is_pak_header_end()) {
+    while (!feof(res->pakFile)) {
+        if (reach_pak_header_end(res)) {
             break;
         }
 
-        attr = header_add_new_attr();
-        parse_file_name(attr);
-        parse_file_size(attr);
-        parse_file_last_write_time(attr);
+        attr = alloc_or_die(res, sizeof(FileAttr));
+        parse_file_name(res, attr);
+        parse_file_size(res, attr);
+        parse_file_last_write_time(res, attr);
+
+        file_attr_list_add(&(header->flist), attr);
     }
 }
 
-void parse_header(void) {
-    parse_magic();
-    parse_version();
-    parse_all_file_attrs();
+void parse_pak_header(Resource* res, PakHeader* header) {
+    parse_magic(res, header);
+    parse_version(res, header);
+    parse_all_file_attrs(res, header);
 }
 
-/*
-    save all the file name and its file size.
-*/
-void save_file_name_list(void) {
-    struct FileAttribute* cursor = header.attrListHead;
+/***************** saving. ****************/
+void build_complete_path(char* buf, size_t len, const char* extractPath, const char* fileName) {
+    while (*extractPath != '\0') {
+        *buf = *extractPath;
 
-    while (cursor != NULL) {
-        fprintf(filenameListSav, "%s, %ld\n", cursor->fileName, cursor->fileSize);
-        cursor = cursor->next;
+        ++buf;
+        ++extractPath;
     }
 
-    printf("[%s %s] file names are saved at \".\\%s\"\n", __DATE__, __TIME__, FILE_NAME_LIST_SAV_PATH);
-}
-
-char* construct_complete_path(struct FileAttribute* attr) {
-    char* temp;
-    char* pathCursor;
-    char* completePath = (char*)malloc(MAX_PATH * sizeof(char));
-    
-    if (completePath == NULL) {
-        log_error_die("can't allocate memory to save path\n");
+    --extractPath;
+    if (*extractPath != '\\') {
+        *buf = '\\';
+        ++buf;
     }
 
-    pathCursor = completePath;
-    temp = filesSaveRootDir;
-    while (*temp != '\0') {
-        *pathCursor = *temp;
+    while (*fileName != '\0') {
+        *buf = *fileName;
 
-        ++pathCursor;
-        ++temp;
+        ++buf;
+        ++fileName;
     }
 
-    temp = attr->fileName;
-    while (*temp != '\0') {
-        *pathCursor = *temp;
-
-        ++pathCursor;
-        ++temp;
-    }
-
-    *pathCursor = '\0';
-    return completePath;
+    *buf = '\0';
 }
 
 BOOL is_dir_exist(const char* path) {
@@ -264,7 +252,7 @@ BOOL is_dir_exist(const char* path) {
          (dwAttrib & FILE_ATTRIBUTE_DIRECTORY));
 }
 
-void recursive_create_parent_dirs(char* path) {
+BOOL recursive_create_parent_dirs(char* path) {
     char* cursor = path;
 
     while (*cursor != '\0') {
@@ -273,7 +261,7 @@ void recursive_create_parent_dirs(char* path) {
 
             if (!is_dir_exist(path)) {
                 if (!CreateDirectory(path, NULL)) {
-                    log_error_die("even can't create directories on windows, %ld\n", GetLastError());
+                    return FALSE;
                 }
             }
 
@@ -282,18 +270,24 @@ void recursive_create_parent_dirs(char* path) {
 
         ++cursor;
     }
+
+    return TRUE;
 }
 
-void parse_and_save_one_file(struct FileAttribute* attr) {
-    char* completePath;
+void parse_and_extract_one_file(Resource* res, FileAttr* attr, const char* extractPath, char* buf, size_t len) {
+    char path[MAX_PATH];
     UINT32 fileSize = attr->fileSize;
     UINT32 readLen;
     HANDLE hFile;
     
-    completePath = construct_complete_path(attr);
-    recursive_create_parent_dirs(completePath);
+    build_complete_path(path, MAX_PATH, extractPath, attr->fileName);
+    
+    if (!recursive_create_parent_dirs(path)) {
+        fprintf(stderr, "[ERROR] can't create parent dirs for `%s`\n", path);
+        return;
+    }
 
-    hFile = CreateFile(completePath, 
+    hFile = CreateFile(path, 
                     GENERIC_WRITE,
                     0,
                     NULL,
@@ -302,47 +296,82 @@ void parse_and_save_one_file(struct FileAttribute* attr) {
                     NULL);
         
     if (hFile == INVALID_HANDLE_VALUE) {
-        log_error_die("call on CreateFile() failed on `%s`, %ld\n", completePath, GetLastError());
+        fprintf(stderr, "[ERROR] CreateFile() failed on `%s`\n", path);
+        return;
     }
 
     while (fileSize > 0) {
-        if (fileSize < BUFFER_LEN) {
-            readLen = fread(rwBuf, sizeof(char), fileSize, pakFile);
+        if (fileSize < len) {
+            readLen = fread(buf, sizeof(char), fileSize, res->pakFile);
         }
         else {
-            readLen = fread(rwBuf, sizeof(char), BUFFER_LEN, pakFile);
+            readLen = fread(buf, sizeof(char), len, res->pakFile);
         }
 
-        decode_bytes(rwBuf, rwBuf, readLen);
-        WriteFile(hFile, rwBuf, readLen, NULL, NULL);
+        decode_bytes(buf, buf, readLen);
+        
+        if (!WriteFile(hFile, buf, readLen, NULL, NULL)) {
+            fprintf(stderr, "[ERROR] WriteFile() failed\n");
+            goto tidy_up;
+        }
+
         fileSize -= readLen;
     }
 
-    SetFileTime(hFile, NULL, NULL, &(attr->lastWriteTime));
+    if (!SetFileTime(hFile, NULL, NULL, &(attr->lastWriteTime))) {
+        fprintf(stderr, "[ERROR] SetFileTime() failed\n");
+        goto tidy_up;
+    }
+
+tidy_up:
     CloseHandle(hFile);
-    free(completePath);
 }
 
-void save_body(void) {
-    struct FileAttribute* attr = header.attrListHead;
+void save_file_name_list(Resource* res, PakHeader* header, const char* savPath) {
+    FileAttr* attr = header->flist.head;
 
     while (attr != NULL) {
-        parse_and_save_one_file(attr);
+        fprintf(res->filenameListSav, "%s, %ld\n", attr->fileName, attr->fileSize);
         attr = attr->next;
     }
 
-    printf("[%s %s] files are saved at \".\\%s\"\n", __DATE__, __TIME__, filesSaveRootDir);
+    printf("[SUCCESS] file name list is saved at `%s`.\n", savPath);
+}
+
+void extract_files(Resource* res, PakHeader* header, const char* extractPath) {
+    FileAttr* attr = header->flist.head;
+    char buf[BUFFER_SIZE];
+
+    while (attr != NULL) {
+        parse_and_extract_one_file(res, attr, extractPath, buf, BUFFER_SIZE);
+        attr = attr->next;
+    }
+
+    printf("[SUCCESS] files are saved at `%s`.\n", extractPath);
 }
 
 int main(int argc, char* argv[]) {
+    Resource res;
+    PakHeader header;
+
     if (argc != 3) {
-        log_error_die("usage: %s main.pak extract_dir\n", argv[0]);
+        fprintf(stderr, "usage: %s main.pak extract_dir\n", argv[0]);
+        return 1;
     }
 
-    init_resources(argv[1], argv[2]);
-    parse_header();
-    save_file_name_list();
-    save_body();
-    destroy_resources();
+    if (!resource_init(&res, MAX_BLOCK_SIZE * MAX_FILE_NUM, argv[1], "filenames.txt")) {
+        fprintf(stderr, "[ERROR] can't init resources\n");
+        return 1;
+    }
+
+    pak_header_init(&header);
+    parse_pak_header(&res, &header);
+
+    printf("[SUCCESS] `%s` has %d files\n", argv[1], header.flist.length);
+    save_file_name_list(&res, &header, "filenames.txt");
+    printf("saving files ...\n");
+    extract_files(&res, &header, argv[2]);
+
+    resource_free(&res);
     return 0;
 }
