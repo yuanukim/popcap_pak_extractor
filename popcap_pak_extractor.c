@@ -4,26 +4,44 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-typedef struct Allocator     Allocator;
+typedef unsigned char            ArenaFlag;
+typedef struct ArenaBlockHeader  ArenaBlockHeader;
+typedef struct ArenaAllocator    ArenaAllocator;
 typedef struct FileAttr      FileAttr;
 typedef struct FileAttrList  FileAttrList;
 typedef struct PakHeader     PakHeader;
 typedef struct Resource      Resource;
-
-#define MAX_BLOCK_SIZE  328
-#define MAX_FILE_NUM    16384
-
-#define BUFFER_SIZE  8192
 
 #define BYTES_OF_MAGIC       4
 #define BYTES_OF_VERSION     4
 #define BYTES_OF_FILE_SIZE   4
 #define BYTES_OF_FILE_TIME   sizeof(FILETIME)
 
-struct Allocator {
-    char* buf;
+/*
+    when allocate a block, it can only be those 3 status:
+
+    1. only one pointer to take the whole block,
+    2. multi pointers split this block,
+    3. no usage.
+
+    if case 1 is fit, then if that block is no need to use, we can
+    consider it as a new block, and reuse it in case 1 or case 2.
+*/
+#define ARENA_FLAG_ONLY_ONE      0
+#define ARENA_FLAG_MULTI_PARTS   1
+#define ARENA_FLAG_NO_USE        2
+
+struct ArenaBlockHeader {
     size_t used;
-    size_t maxLen;
+    size_t capacity;
+    ArenaFlag flag;
+    ArenaBlockHeader* next;
+};
+
+struct ArenaAllocator {
+    ArenaBlockHeader* head;
+    size_t blockSize;
+    size_t blockNum;
 };
 
 struct FileAttr {
@@ -46,45 +64,104 @@ struct PakHeader {
 };
 
 struct Resource {
-    Allocator allocator;
+    ArenaAllocator arena;
     FILE* pakFile;
     FILE* filenameListSav;
 };
 
-BOOL allocator_init(Allocator* allocator, size_t size) {
-    allocator->buf = (char*)malloc(size);
-    if (allocator->buf == NULL) {
+BOOL arena_init(ArenaAllocator* arena, size_t blockSize) {
+    arena->blockSize = blockSize;
+    arena->head = (ArenaBlockHeader*)malloc(sizeof(ArenaBlockHeader) + blockSize);
+    
+    if (arena->head == NULL) {
         return FALSE;
     }
 
-    allocator->used = 0;
-    allocator->maxLen = size;
+    arena->head->capacity = blockSize;
+    arena->head->flag = ARENA_FLAG_NO_USE;
+    arena->head->used = 0;
+    arena->head->next = NULL;
+    arena->blockNum = 1;
+
     return TRUE;
 }
 
-void allocator_free(Allocator* allocator) {
-    free(allocator->buf);
-    allocator->maxLen = allocator->used = 0;
+void arena_free(ArenaAllocator* arena) {
+    ArenaBlockHeader* cursor = arena->head;
+    arena->blockNum = 0;
+
+    while (cursor != NULL) {
+        arena->head = cursor->next;
+        free(cursor);
+        cursor = arena->head;
+    }
 }
 
-void* alloc_memory(Allocator* allocator, size_t size) {
-    if (allocator->used + size >= allocator->maxLen) {
-        return NULL;
+ArenaBlockHeader* arena_create_new_block(ArenaAllocator* arena, size_t size, size_t used, ArenaFlag flag) {
+    ArenaBlockHeader* newBlock = (ArenaBlockHeader*)malloc(sizeof(ArenaBlockHeader) + size);
+    
+    if (newBlock != NULL) {
+        newBlock->capacity = size;
+        newBlock->flag = flag;
+        newBlock->used = used;
+        newBlock->next = arena->head;
+        arena->head = newBlock;
+
+        arena->blockNum += 1;
     }
 
-    allocator->used += size;
-    return (void*)(allocator->buf + allocator->used - size);
+    return newBlock;
 }
 
-BOOL resource_init(Resource* res, size_t size, const char* pakFilePath, const char* filenameListSavPath) {
-    if (!allocator_init(&(res->allocator), size)) {
+void* arena_malloc(ArenaAllocator* arena, size_t size) {
+    ArenaBlockHeader* cursor = arena->head;
+    ArenaBlockHeader* newBlock;
+
+    while (cursor != NULL) {
+        if (cursor->flag != ARENA_FLAG_ONLY_ONE && cursor->used + size <= cursor->capacity) {
+            cursor->used += size;
+
+            if (size == arena->blockSize) {
+                cursor->flag = ARENA_FLAG_ONLY_ONE;
+            }
+            else {
+                cursor->flag = ARENA_FLAG_MULTI_PARTS;
+            }
+
+            return (void*)((char*)(cursor + 1) + cursor->used - size);
+        }
+
+        cursor = cursor->next;
+    }
+
+    /* if can't find, create a new block. */
+    if (size < arena->blockSize) {
+        newBlock = arena_create_new_block(arena, arena->blockSize, size, ARENA_FLAG_MULTI_PARTS);
+    }
+    else {
+        newBlock = arena_create_new_block(arena, size, size, ARENA_FLAG_ONLY_ONE);
+    }
+
+    return newBlock != NULL ? (void*)(newBlock + 1) : NULL;
+}
+
+void arena_recycle(void* memory) {
+    ArenaBlockHeader* header = (ArenaBlockHeader*)memory - 1;
+    if (header->flag == ARENA_FLAG_ONLY_ONE) {
+        header->flag = ARENA_FLAG_NO_USE;
+        header->used = 0;
+    }
+}
+
+BOOL resource_init(Resource* res, const char* pakFilePath, const char* filenameListSavPath) {
+    if (!arena_init(&(res->arena), 8192)) {
         return FALSE;
     }
 
     res->pakFile = fopen(pakFilePath, "rb");
     if (res->pakFile == NULL) {
         fprintf(stderr, "[ERROR] `%s` is not a valid pak file\n", pakFilePath);
-        allocator_free(&(res->allocator));
+        arena_free(&(res->arena));
         return FALSE;
     }
 
@@ -92,7 +169,7 @@ BOOL resource_init(Resource* res, size_t size, const char* pakFilePath, const ch
     if (res->filenameListSav == NULL) {
         fprintf(stderr, "[ERROR] `%s` is not a valid save path\n", filenameListSavPath);
         fclose(res->pakFile);
-        allocator_free(&(res->allocator));
+        arena_free(&(res->arena));
         return FALSE;
     }
 
@@ -100,13 +177,13 @@ BOOL resource_init(Resource* res, size_t size, const char* pakFilePath, const ch
 }
 
 void resource_free(Resource* res) {
-    allocator_free(&(res->allocator));
+    arena_free(&(res->arena));
     fclose(res->pakFile);
     fclose(res->filenameListSav);
 }
 
 void* alloc_or_die(Resource* res, size_t size) {
-    void* memory = alloc_memory(&(res->allocator), size);
+    void* memory = arena_malloc(&(res->arena), size);
     if (memory == NULL) {
         resource_free(res);
         fprintf(stderr, "[ERROR] memory is not enough to parse so many files\n");
@@ -340,10 +417,11 @@ void save_file_name_list(Resource* res, PakHeader* header, const char* savPath) 
 
 void extract_files(Resource* res, PakHeader* header, const char* extractPath) {
     FileAttr* attr = header->flist.head;
-    char buf[BUFFER_SIZE];
+    size_t buf_size = 8192;
+    char* buf = arena_malloc(&(res->arena), buf_size);
 
     while (attr != NULL) {
-        parse_and_extract_one_file(res, attr, extractPath, buf, BUFFER_SIZE);
+        parse_and_extract_one_file(res, attr, extractPath, buf, buf_size);
         attr = attr->next;
     }
 
@@ -359,7 +437,7 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    if (!resource_init(&res, MAX_BLOCK_SIZE * MAX_FILE_NUM, argv[1], "filenames.txt")) {
+    if (!resource_init(&res, argv[1], "filenames.txt")) {
         fprintf(stderr, "[ERROR] can't init resources\n");
         return 1;
     }
