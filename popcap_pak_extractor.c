@@ -89,6 +89,10 @@ ArenaAllocator* arena_create(size_t blockSize) {
     arena->head->next = NULL;
     arena->blockNum = 1;
 
+    #if ARENA_ENABLE_DEBUG
+    printf("default block size is %d\n\n", blockSize);
+    #endif
+
     return arena;
 }
 
@@ -164,15 +168,10 @@ void arena_recycle(void* memory) {
     }
 }
 
-Resource* resource_create(const char* pakFilePath, const char* filenameListSavPath) {
-    Resource* res = (Resource*)malloc(sizeof(Resource));
-    if (res == NULL) {
-        return NULL;
-    }
-
+BOOL resource_init(Resource* res, const char* pakFilePath, const char* filenameListSavPath) {
     res->arena = arena_create(8192);
     if (res->arena == NULL) {
-        goto clean_resource;
+        return FALSE;
     }
 
     res->pakFile = fopen(pakFilePath, "rb");
@@ -187,29 +186,26 @@ Resource* resource_create(const char* pakFilePath, const char* filenameListSavPa
         goto clean_pak_file;
     }
 
-    return res;
+    return TRUE;
 
 clean_pak_file:
     fclose(res->pakFile);
 clean_arena:
     arena_free(res->arena);
-clean_resource:
-    free(res);
+
+    return FALSE;
 }
 
 void resource_free(Resource* res) {
-    if (res != NULL) {
-        if (res->pakFile != NULL) {
-            fclose(res->pakFile);
-        }
-
-        if (res->filenameListSav != NULL) {
-            fclose(res->filenameListSav);
-        }
-
-        arena_free(res->arena);
-        free(res);
+    if (res->pakFile != NULL) {
+        fclose(res->pakFile);
     }
+
+    if (res->filenameListSav != NULL) {
+        fclose(res->filenameListSav);
+    }
+
+    arena_free(res->arena);
 }
 
 void* alloc_or_die(Resource* res, size_t size) {
@@ -459,7 +455,7 @@ void extract_files(Resource* res, PakHeader* header, const char* extractPath) {
 }
 
 int main(int argc, char* argv[]) {
-    Resource* res;
+    Resource res;
     PakHeader header;
 
     if (argc != 3) {
@@ -467,20 +463,19 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    res = resource_create(argv[1], "filenames.txt");
-    if (res == NULL) {
+    if (!resource_init(&res, argv[1], "filenames.txt")) {
         fprintf(stderr, "[ERROR] can't init resources\n");
         return 1;
     }
 
     pak_header_init(&header);
-    parse_pak_header(res, &header);
+    parse_pak_header(&res, &header);
 
     printf("[SUCCESS] `%s` has %d files\n", argv[1], header.flist.length);
-    save_file_name_list(res, &header, "filenames.txt");
+    save_file_name_list(&res, &header, "filenames.txt");
     printf("saving files ...\n");
-    extract_files(res, &header, argv[2]);
+    extract_files(&res, &header, argv[2]);
 
-    resource_free(res);
+    resource_free(&res);
     return 0;
 }
