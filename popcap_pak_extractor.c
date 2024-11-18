@@ -3,10 +3,13 @@
 #include <windows.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <assert.h>
 
 typedef unsigned char            ArenaFlag;
 typedef struct ArenaBlockHeader  ArenaBlockHeader;
 typedef struct ArenaAllocator    ArenaAllocator;
+typedef void (*arena_cleanup_when_malloc_failed) (void* resourceHandle);
+
 typedef struct FileAttr      FileAttr;
 typedef struct FileAttrList  FileAttrList;
 typedef struct PakHeader     PakHeader;
@@ -42,6 +45,9 @@ struct ArenaAllocator {
     ArenaBlockHeader* head;
     size_t blockSize;
     size_t blockNum;
+
+    void* resourceHandle;
+    arena_cleanup_when_malloc_failed cleanup_when_malloc_failed;
 };
 
 struct FileAttr {
@@ -69,7 +75,18 @@ struct Resource {
     FILE* filenameListSav;
 };
 
-ArenaAllocator* arena_create(size_t blockSize) {
+/*
+    create a arena allocator handle.
+    remember to call arena_free() at last.
+
+    arena allocator is always embedded in other structs which contains some other resources,
+    so the params `resourceHandle` and `handler` are required here, because allocate memory can be failed, 
+    when that happens, `arena_cleanup_when_malloc_failed` handler will be executed to clean
+    the other resources, and exit the whole program.
+
+    if you don't have other resources to clean, just pass NULL to both `resourceHandle` and `handler`.
+*/
+ArenaAllocator* arena_create(size_t blockSize, void* resourceHandle, arena_cleanup_when_malloc_failed handler) {
     ArenaAllocator* arena = (ArenaAllocator*)malloc(sizeof(ArenaAllocator));
 
     if (arena == NULL) {
@@ -88,14 +105,16 @@ ArenaAllocator* arena_create(size_t blockSize) {
     arena->head->used = 0;
     arena->head->next = NULL;
     arena->blockNum = 1;
-
-    #if ARENA_ENABLE_DEBUG
-    printf("default block size is %d\n\n", blockSize);
-    #endif
+    arena->resourceHandle = resourceHandle;
+    arena->cleanup_when_malloc_failed = handler;
 
     return arena;
 }
 
+/*
+    free all blocks and arena itself.
+    this function will do nothing if arena is NULL.
+*/
 void arena_free(ArenaAllocator* arena) {
     ArenaBlockHeader* cursor;
 
@@ -112,6 +131,11 @@ void arena_free(ArenaAllocator* arena) {
     }
 }
 
+/*
+    create a new block with given params.
+
+    if allocation failed, cleanup handler will be executed and exit the whole program.
+*/
 ArenaBlockHeader* arena_create_new_block(ArenaAllocator* arena, size_t size, size_t used, ArenaFlag flag) {
     ArenaBlockHeader* newBlock = (ArenaBlockHeader*)malloc(sizeof(ArenaBlockHeader) + size);
     
@@ -124,10 +148,24 @@ ArenaBlockHeader* arena_create_new_block(ArenaAllocator* arena, size_t size, siz
 
         arena->blockNum += 1;
     }
+    else {
+        if (arena->cleanup_when_malloc_failed != NULL) {
+            arena->cleanup_when_malloc_failed(arena->resourceHandle);
+            fprintf(stderr, "[ERROR] arena allocator: out of memory\n");
+            fflush(stderr);
+            exit(EXIT_FAILURE);
+        }
+    }
 
     return newBlock;
 }
 
+/*
+    same usage as malloc().
+
+    this function uses `arena_create_new_block` to allocate new memory block,
+    so if out of memory, see `arena_create_new_block`.
+*/
 void* arena_malloc(ArenaAllocator* arena, size_t size) {
     ArenaBlockHeader* cursor = arena->head;
     ArenaBlockHeader* newBlock;
@@ -157,9 +195,12 @@ void* arena_malloc(ArenaAllocator* arena, size_t size) {
         newBlock = arena_create_new_block(arena, size, size, ARENA_FLAG_ONLY_ONE);
     }
 
-    return newBlock != NULL ? (void*)(newBlock + 1) : NULL;
+    return (void*)(newBlock + 1);
 }
 
+/*
+    try to recycle memory allocated by arena allocator.
+*/
 void arena_recycle(void* memory) {
     ArenaBlockHeader* header = (ArenaBlockHeader*)memory - 1;
     if (header->flag == ARENA_FLAG_ONLY_ONE) {
@@ -168,8 +209,31 @@ void arena_recycle(void* memory) {
     }
 }
 
+/*
+    clean the resources used in this extractor.
+*/
+void resource_free(Resource* res) {
+    if (res->pakFile != NULL) {
+        fclose(res->pakFile);
+    }
+
+    if (res->filenameListSav != NULL) {
+        fclose(res->filenameListSav);
+    }
+
+    arena_free(res->arena);
+}
+
+/*
+    for arena allocator's allocate failing policy.
+*/
+void arena_cleanup_handler_for_resource(void* resourceHandle) {
+    Resource* res = (Resource*)resourceHandle;
+    resource_free(res);
+}
+
 BOOL resource_init(Resource* res, const char* pakFilePath, const char* filenameListSavPath) {
-    res->arena = arena_create(8192);
+    res->arena = arena_create(8192, res, arena_cleanup_handler_for_resource);
     if (res->arena == NULL) {
         return FALSE;
     }
@@ -194,29 +258,6 @@ clean_arena:
     arena_free(res->arena);
 
     return FALSE;
-}
-
-void resource_free(Resource* res) {
-    if (res->pakFile != NULL) {
-        fclose(res->pakFile);
-    }
-
-    if (res->filenameListSav != NULL) {
-        fclose(res->filenameListSav);
-    }
-
-    arena_free(res->arena);
-}
-
-void* alloc_or_die(Resource* res, size_t size) {
-    void* memory = arena_malloc(res->arena, size);
-    if (memory == NULL) {
-        resource_free(res);
-        fprintf(stderr, "[ERROR] memory is not enough to parse so many files\n");
-        exit(EXIT_FAILURE);
-    }
-
-    return memory;
 }
 
 void file_attr_list_init(FileAttrList* flist) {
@@ -280,7 +321,7 @@ void parse_file_name(Resource* res, FileAttr* attr) {
     filenameLen = (UINT32)decode_one_byte(byte);
 
     /* get the file name. */
-    attr->fileName = alloc_or_die(res, (filenameLen + 1) * sizeof(char));
+    attr->fileName = (char*)arena_malloc(res->arena, (filenameLen + 1) * sizeof(char));
     attr->fileName[filenameLen] = '\0';
     fread(attr->fileName, sizeof(char), filenameLen, res->pakFile);
     decode_bytes(attr->fileName, attr->fileName, filenameLen);
@@ -308,7 +349,7 @@ void parse_all_file_attrs(Resource* res, PakHeader* header) {
             break;
         }
 
-        attr = alloc_or_die(res, sizeof(FileAttr));
+        attr = (FileAttr*)arena_malloc(res->arena, sizeof(FileAttr));
         parse_file_name(res, attr);
         parse_file_size(res, attr);
         parse_file_last_write_time(res, attr);
@@ -355,6 +396,9 @@ BOOL is_dir_exist(const char* path) {
          (dwAttrib & FILE_ATTRIBUTE_DIRECTORY));
 }
 
+/*
+    create all parent directories from the given path.
+*/
 BOOL recursive_create_parent_dirs(char* path) {
     char* cursor = path;
 
@@ -444,7 +488,7 @@ void save_file_name_list(Resource* res, PakHeader* header, const char* savPath) 
 void extract_files(Resource* res, PakHeader* header, const char* extractPath) {
     FileAttr* attr = header->flist.head;
     size_t buf_size = 8192;
-    char* buf = alloc_or_die(res, buf_size);
+    char* buf = (char*)arena_malloc(res->arena, buf_size * sizeof(char));
 
     while (attr != NULL) {
         parse_and_extract_one_file(res, attr, extractPath, buf, buf_size);
