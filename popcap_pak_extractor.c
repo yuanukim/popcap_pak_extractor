@@ -503,7 +503,8 @@ int main(int argc, char* argv[]) {
     PakHeader header;
 
     if (argc != 3) {
-        fprintf(stderr, "usage: %s main.pak extract_dir\n", argv[0]);
+        fprintf(stderr, "if you have a .pak file called main.pak, and you want to extract it to\n");
+        fprintf(stderr, " a dir called extract_dir, then usage is: %s main.pak extract_dir\n", argv[0]);
         return 1;
     }
 
