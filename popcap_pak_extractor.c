@@ -7,7 +7,6 @@
 typedef unsigned char            ArenaFlag;
 typedef struct ArenaBlockHeader  ArenaBlockHeader;
 typedef struct ArenaAllocator    ArenaAllocator;
-typedef void (*arena_cleanup_when_malloc_failed) (void* resourceHandle);
 
 typedef struct FileAttr      FileAttr;
 typedef struct FileAttrList  FileAttrList;
@@ -44,9 +43,6 @@ struct ArenaAllocator {
     ArenaBlockHeader* head;
     size_t blockSize;
     size_t blockNum;
-
-    void* resourceHandle;
-    arena_cleanup_when_malloc_failed cleanup_when_malloc_failed;
 };
 
 struct FileAttr {
@@ -85,7 +81,7 @@ struct Resource {
 
     if you don't have other resources to clean, just pass NULL to both `resourceHandle` and `handler`.
 */
-ArenaAllocator* arena_create(size_t blockSize, void* resourceHandle, arena_cleanup_when_malloc_failed handler) {
+ArenaAllocator* arena_create(size_t blockSize) {
     ArenaAllocator* arena = (ArenaAllocator*)malloc(sizeof(ArenaAllocator));
 
     if (arena == NULL) {
@@ -104,8 +100,6 @@ ArenaAllocator* arena_create(size_t blockSize, void* resourceHandle, arena_clean
     arena->head->used = 0;
     arena->head->next = NULL;
     arena->blockNum = 1;
-    arena->resourceHandle = resourceHandle;
-    arena->cleanup_when_malloc_failed = handler;
 
     return arena;
 }
@@ -148,12 +142,9 @@ ArenaBlockHeader* arena_create_new_block(ArenaAllocator* arena, size_t size, siz
         arena->blockNum += 1;
     }
     else {
-        if (arena->cleanup_when_malloc_failed != NULL) {
-            arena->cleanup_when_malloc_failed(arena->resourceHandle);
-            fprintf(stderr, "[ERROR] arena allocator: out of memory\n");
-            fflush(stderr);
-            exit(EXIT_FAILURE);
-        }
+        fprintf(stderr, "[ERROR] arena allocator: out of memory\n");
+        fflush(stderr);
+        abort();
     }
 
     return newBlock;
@@ -232,7 +223,7 @@ void arena_cleanup_handler_for_resource(void* resourceHandle) {
 }
 
 BOOL resource_init(Resource* res, const char* pakFilePath, const char* filenameListSavPath) {
-    res->arena = arena_create(8192, res, arena_cleanup_handler_for_resource);
+    res->arena = arena_create(8192);
     if (res->arena == NULL) {
         return FALSE;
     }
