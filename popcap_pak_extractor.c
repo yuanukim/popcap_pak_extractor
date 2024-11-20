@@ -73,13 +73,6 @@ struct Resource {
 /*
     create a arena allocator handle.
     remember to call arena_free() at last.
-
-    arena allocator is always embedded in other structs which contains some other resources,
-    so the params `resourceHandle` and `handler` are required here, because allocate memory can be failed, 
-    when that happens, `arena_cleanup_when_malloc_failed` handler will be executed to clean
-    the other resources, and exit the whole program.
-
-    if you don't have other resources to clean, just pass NULL to both `resourceHandle` and `handler`.
 */
 ArenaAllocator* arena_create(size_t blockSize) {
     ArenaAllocator* arena = (ArenaAllocator*)malloc(sizeof(ArenaAllocator));
@@ -127,7 +120,7 @@ void arena_free(ArenaAllocator* arena) {
 /*
     create a new block with given params.
 
-    if allocation failed, cleanup handler will be executed and exit the whole program.
+    if allocation failed, this function would log the error and call abort().
 */
 ArenaBlockHeader* arena_create_new_block(ArenaAllocator* arena, size_t size, size_t used, ArenaFlag flag) {
     ArenaBlockHeader* newBlock = (ArenaBlockHeader*)malloc(sizeof(ArenaBlockHeader) + size);
@@ -154,7 +147,8 @@ ArenaBlockHeader* arena_create_new_block(ArenaAllocator* arena, size_t size, siz
     same usage as malloc().
 
     this function uses `arena_create_new_block` to allocate new memory block,
-    so if out of memory, see `arena_create_new_block`.
+    so if out of memory, abort() would be called. in this way, check this 
+    function's return value to see if it is NULL is redundant.
 */
 void* arena_malloc(ArenaAllocator* arena, size_t size) {
     ArenaBlockHeader* cursor = arena->head;
