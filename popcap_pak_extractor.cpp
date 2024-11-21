@@ -1,4 +1,5 @@
 /**
+ * @author yuanluo2
  * a very big thanks to https://github.com/nathaniel-daniel/popcap-pak-rs for giving 
  * the popcap .pak file's format:
  * 
