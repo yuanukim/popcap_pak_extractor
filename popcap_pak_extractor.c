@@ -188,9 +188,11 @@ void* arena_malloc(ArenaAllocator* arena, size_t size) {
 /*
     try to recycle memory allocated by arena allocator.
 */
-void arena_recycle(void* memory) {
+void arena_recycle(ArenaAllocator* arena, void* memory, size_t capacity) {
     ArenaBlockHeader* header = (ArenaBlockHeader*)memory - 1;
-    if (header->flag == ARENA_FLAG_ONLY_ONE) {
+
+    if (capacity >= arena->blockSize && header->flag == ARENA_FLAG_ONLY_ONE) {
+        hfs_log(stdout, "trigger recycle for %ld bytes\n", capacity);
         header->flag = ARENA_FLAG_NO_USE;
         header->used = 0;
     }
