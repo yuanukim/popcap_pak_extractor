@@ -1,13 +1,12 @@
-#define WIN32_LEAN_AND_MEAN
-
 /*
     @author yuanluo2
 */
+#define WIN32_LEAN_AND_MEAN
+
 #include <windows.h>
 #include <stdio.h>
 #include <stdlib.h>
 
-typedef unsigned char            ArenaFlag;
 typedef struct ArenaBlockHeader  ArenaBlockHeader;
 typedef struct ArenaAllocator    ArenaAllocator;
 
@@ -21,24 +20,9 @@ typedef struct Resource      Resource;
 #define BYTES_OF_FILE_SIZE   4
 #define BYTES_OF_FILE_TIME   sizeof(FILETIME)
 
-/*
-    when allocate a block, it can only be those 3 status:
-
-    1. only one pointer to take the whole block,
-    2. multi pointers split this block,
-    3. no usage.
-
-    if case 1 is fit, then if that block is no need to use, we can
-    consider it as a new block, and reuse it in case 1 or case 2.
-*/
-#define ARENA_FLAG_ONLY_ONE      0
-#define ARENA_FLAG_MULTI_PARTS   1
-#define ARENA_FLAG_NO_USE        2
-
 struct ArenaBlockHeader {
     size_t used;
     size_t capacity;
-    ArenaFlag flag;
     ArenaBlockHeader* next;
 };
 
@@ -92,7 +76,6 @@ ArenaAllocator* arena_create(size_t blockSize) {
 
     arena->blockSize = blockSize;
     arena->head->capacity = blockSize;
-    arena->head->flag = ARENA_FLAG_NO_USE;
     arena->head->used = 0;
     arena->head->next = NULL;
     arena->blockNum = 1;
@@ -122,15 +105,12 @@ void arena_free(ArenaAllocator* arena) {
 
 /*
     create a new block with given params.
-
-    if allocation failed, this function would log the error and call abort().
 */
-ArenaBlockHeader* arena_create_new_block(ArenaAllocator* arena, size_t size, size_t used, ArenaFlag flag) {
+ArenaBlockHeader* arena_create_new_block(ArenaAllocator* arena, size_t size, size_t used) {
     ArenaBlockHeader* newBlock = (ArenaBlockHeader*)malloc(sizeof(ArenaBlockHeader) + size);
     
     if (newBlock != NULL) {
         newBlock->capacity = size;
-        newBlock->flag = flag;
         newBlock->used = used;
         newBlock->next = arena->head;
         arena->head = newBlock;
@@ -148,26 +128,14 @@ ArenaBlockHeader* arena_create_new_block(ArenaAllocator* arena, size_t size, siz
 
 /*
     same usage as malloc().
-
-    this function uses `arena_create_new_block` to allocate new memory block,
-    so if out of memory, abort() would be called. in this way, check this 
-    function's return value to see if it is NULL is redundant.
 */
 void* arena_malloc(ArenaAllocator* arena, size_t size) {
     ArenaBlockHeader* cursor = arena->head;
     ArenaBlockHeader* newBlock;
 
     while (cursor != NULL) {
-        if (cursor->flag != ARENA_FLAG_ONLY_ONE && cursor->used + size <= cursor->capacity) {
+        if (cursor->used + size <= cursor->capacity) {
             cursor->used += size;
-
-            if (size == arena->blockSize) {
-                cursor->flag = ARENA_FLAG_ONLY_ONE;
-            }
-            else {
-                cursor->flag = ARENA_FLAG_MULTI_PARTS;
-            }
-
             return (void*)((char*)(cursor + 1) + cursor->used - size);
         }
 
@@ -176,25 +144,13 @@ void* arena_malloc(ArenaAllocator* arena, size_t size) {
 
     /* if can't find, create a new block. */
     if (size < arena->blockSize) {
-        newBlock = arena_create_new_block(arena, arena->blockSize, size, ARENA_FLAG_MULTI_PARTS);
+        newBlock = arena_create_new_block(arena, arena->blockSize, size);
     }
     else {
-        newBlock = arena_create_new_block(arena, size, size, ARENA_FLAG_ONLY_ONE);
+        newBlock = arena_create_new_block(arena, size, size);
     }
 
     return (void*)(newBlock + 1);
-}
-
-/*
-    try to recycle memory allocated by arena allocator.
-*/
-void arena_recycle(ArenaAllocator* arena, void* memory, size_t capacity) {
-    ArenaBlockHeader* header = (ArenaBlockHeader*)memory - 1;
-
-    if (capacity >= arena->blockSize && header->flag == ARENA_FLAG_ONLY_ONE) {
-        header->flag = ARENA_FLAG_NO_USE;
-        header->used = 0;
-    }
 }
 
 /*
@@ -210,14 +166,6 @@ void resource_free(Resource* res) {
     }
 
     arena_free(res->arena);
-}
-
-/*
-    for arena allocator's allocate failing policy.
-*/
-void arena_cleanup_handler_for_resource(void* resourceHandle) {
-    Resource* res = (Resource*)resourceHandle;
-    resource_free(res);
 }
 
 BOOL resource_init(Resource* res, const char* pakFilePath, const char* filenameListSavPath) {
@@ -392,6 +340,7 @@ BOOL recursive_create_parent_dirs(char* path) {
 
     while (*cursor != '\0') {
         if (*cursor == '\\') {
+            /* split a substr here, just make it ends with '\0'. */
             *cursor = '\0';
 
             if (!is_dir_exist(path)) {
@@ -400,6 +349,7 @@ BOOL recursive_create_parent_dirs(char* path) {
                 }
             }
 
+            /* setting back. */
             *cursor = '\\';
         }
 
@@ -491,8 +441,13 @@ int main(int argc, char* argv[]) {
     PakHeader header;
 
     if (argc != 3) {
-        fprintf(stderr, "if you have a .pak file called main.pak, and you want to extract it to\n");
-        fprintf(stderr, " a dir called extract_dir, then usage is: %s main.pak extract_dir\n", argv[0]);
+        fprintf(stderr, "if you have a .pak file called `main.pak`, and you want to extract it to\n");
+        fprintf(stderr, " a dir called `extract_dir`, then usage is: %s main.pak extract_dir\n", argv[0]);
+        return 1;
+    }
+
+    if (is_dir_exist(argv[2])) {
+        fprintf(stderr, "given dir is exists: %s\n", argv[2]);
         return 1;
     }
 
@@ -506,6 +461,7 @@ int main(int argc, char* argv[]) {
 
     printf("[SUCCESS] `%s` has %d files\n", argv[1], header.flist.length);
     save_file_name_list(&res, &header, "filenames.txt");
+
     printf("saving files ...\n");
     extract_files(&res, &header, argv[2]);
 
