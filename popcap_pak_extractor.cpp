@@ -28,7 +28,6 @@
 
 #include <iostream>
 #include <fstream>
-#include <memory>
 #include <algorithm>
 #include <system_error>
 #include <vector>
@@ -162,7 +161,7 @@ public:
         _capacity = newCapacity;
     }
 
-    void expand_length_with_terminated(size_t newLen) {
+    void expand_length(size_t newLen) {
         expand_capacity(newLen + 1);
         _len = newLen;
         _data[_len] = '\0';
@@ -261,7 +260,7 @@ void parse_file_name(FileAttr& attr, std::ifstream& f) {
 
     // get the length of the file name.
     uint32_t fileNameLen = (uint32_t)decode_one_byte(c);
-    attr.fileName.expand_length_with_terminated(fileNameLen);
+    attr.fileName.expand_length(fileNameLen);
 
     // get file name.
     f.read(attr.fileName.data(), fileNameLen);
