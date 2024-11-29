@@ -1,6 +1,6 @@
 /**
  * @author yuanluo2
- * @brief PopCap's .pak file extractor, written in C++11.
+ * @brief PopCap's .pak file extractor, written in C++11, only works for windows platform.
  * 
  * a very big thanks to https://github.com/nathaniel-daniel/popcap-pak-rs for giving 
  * the popcap .pak file's format:
@@ -21,7 +21,6 @@
  *       record.filesize bytes - File data
  *   end
  * 
- * This project only works for windows platform. please try to compile it with at least C++17.
 */
 #define WIN32_LEAN_AND_MEAN
 
