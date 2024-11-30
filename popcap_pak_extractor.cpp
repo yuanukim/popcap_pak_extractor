@@ -30,6 +30,7 @@
 #include <fstream>
 #include <algorithm>
 #include <system_error>
+#include <utility>
 #include <vector>
 #include <array>
 #include <cstdint>
@@ -100,9 +101,7 @@ public:
         if (this != &other) {
             _capacity = other._capacity;
             _len = other._len;
-            _data = other._data;
-
-            other._data = nullptr;
+            std::swap(_data, other._data);
         }
 
         return *this;
