@@ -1,5 +1,6 @@
 /*
     @author yuanluo2
+    @brief popcap's .pak file extractor written in ANSI C, no 3rd parties, only works for windows platform.
 */
 #define WIN32_LEAN_AND_MEAN
 
