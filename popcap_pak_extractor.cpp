@@ -203,27 +203,6 @@ struct Header {
     std::vector<FileAttr> fileAttrList;
 };
 
-/*
-    do some cleaning task at last.
-    
-    RAII maybe better, but this technique is fit here, so I use it.
-*/
-template<typename Func>
-class Finally {
-    Func f;
-public:
-    Finally(Func&& _f) : f{ _f } {}
-
-    ~Finally() noexcept {
-        f();
-    }
-};
-
-template<typename Func>
-Finally<Func> finally(Func&& f) {
-    return Finally<Func>{ f };
-}
-
 template<typename CharType>
 uchar decode_one_byte(CharType c) {
     // using 0xf7 to decode the data in .pak file.
@@ -237,61 +216,140 @@ void decode_bytes(CharType* data, size_t len) {
     }
 }
 
-bool is_pak_header_end(std::ifstream& f) {
-    char c;
-    f.read(&c, 1);
-    return decode_one_byte(c) == 0x80;
-}
+class HeaderParser {
+    bool is_pak_header_end(std::ifstream& f) {
+        char c;
+        f.read(&c, 1);
+        return decode_one_byte(c) == 0x80;
+    }
 
-void parse_magic(Header& header, std::ifstream& f) {
-    f.read((char*)(header.magic.data()), header.magic.size());
-    decode_bytes(header.magic.data(), header.magic.size());
-}
+    void parse_magic(Header& header, std::ifstream& f) {
+        f.read((char*)(header.magic.data()), header.magic.size());
+        decode_bytes(header.magic.data(), header.magic.size());
+    }
 
-void parse_version(Header& header, std::ifstream& f) {
-    f.read((char*)(header.version.data()), header.version.size());
-    decode_bytes(header.version.data(), header.version.size());
-}
+    void parse_version(Header& header, std::ifstream& f) {
+        f.read((char*)(header.version.data()), header.version.size());
+        decode_bytes(header.version.data(), header.version.size());
+    }
 
-void parse_file_name(FileAttr& attr, std::ifstream& f) {
-    char c;
-    f.read(&c, 1);
+    void parse_file_name(FileAttr& attr, std::ifstream& f) {
+        char c;
+        f.read(&c, 1);
 
-    // get the length of the file name.
-    uint32_t fileNameLen = (uint32_t)decode_one_byte(c);
-    attr.fileName.expand_length(fileNameLen);
+        // get the length of the file name.
+        uint32_t fileNameLen = (uint32_t)decode_one_byte(c);
+        attr.fileName.expand_length(fileNameLen);
 
-    // get file name.
-    f.read(attr.fileName.data(), fileNameLen);
-    decode_bytes(attr.fileName.data(), fileNameLen);
-}
+        // get file name.
+        f.read(attr.fileName.data(), fileNameLen);
+        decode_bytes(attr.fileName.data(), fileNameLen);
+    }
 
-void parse_file_size(FileAttr& attr, std::ifstream& f) {
-    constexpr uint32_t FILE_SIZE_BYTES = 4;
+    void parse_file_size(FileAttr& attr, std::ifstream& f) {
+        constexpr uint32_t FILE_SIZE_BYTES = 4;
 
-    f.read((char*)(&(attr.fileSize)), FILE_SIZE_BYTES);
-    decode_bytes((char*)(&(attr.fileSize)), FILE_SIZE_BYTES);
-}
+        f.read((char*)(&(attr.fileSize)), FILE_SIZE_BYTES);
+        decode_bytes((char*)(&(attr.fileSize)), FILE_SIZE_BYTES);
+    }
 
-void parse_file_last_write_time(FileAttr& attr, std::ifstream& f) {
-    f.read((char*)(&(attr.lastWriteTime)), sizeof(FILETIME));
-    decode_bytes((char*)(&(attr.lastWriteTime)), sizeof(FILETIME));
-}
+    void parse_file_last_write_time(FileAttr& attr, std::ifstream& f) {
+        f.read((char*)(&(attr.lastWriteTime)), sizeof(FILETIME));
+        decode_bytes((char*)(&(attr.lastWriteTime)), sizeof(FILETIME));
+    }
+public:
+    HeaderParser() = default;
 
-void parse_each_file_attr(Header& header, std::ifstream& f) {
-    while (!f.eof()) {
-        if (is_pak_header_end(f)) {
-            break;
+    void parse(Header& header, std::ifstream& f) {
+        parse_magic(header, f);
+        parse_version(header, f);
+
+        while (!f.eof()) {
+            if (is_pak_header_end(f)) {
+                break;
+            }
+
+            FileAttr attr;
+            parse_file_name(attr, f);
+            parse_file_size(attr, f);
+            parse_file_last_write_time(attr, f);
+
+            header.fileAttrList.emplace_back(attr);
+        }
+    }
+};
+
+class WinFile {
+    HANDLE hFile;
+public:
+    WinFile() : hFile{ INVALID_HANDLE_VALUE } {}
+
+    WinFile(const WinFile&) = delete;
+    WinFile& operator=(const WinFile&) = delete;
+
+    WinFile(WinFile&& other) noexcept {
+        if (this != &other) {
+            hFile = other.hFile;
+            other.hFile = INVALID_HANDLE_VALUE;
+        }
+    }
+
+    WinFile& operator=(WinFile&& other) noexcept {
+        if (this != &other) {
+            hFile = other.hFile;
+            other.hFile = INVALID_HANDLE_VALUE;
         }
 
-        FileAttr attr;
-        parse_file_name(attr, f);
-        parse_file_size(attr, f);
-        parse_file_last_write_time(attr, f);
-
-        header.fileAttrList.emplace_back(attr);
+        return *this;
     }
-}
+
+    ~WinFile() noexcept {
+        if (hFile != INVALID_HANDLE_VALUE) {
+            CloseHandle(hFile);
+        }
+    }
+
+    bool init(const CStr& path, std::error_code& ec) noexcept {
+        hFile = CreateFile(path.data(), 
+                            GENERIC_WRITE,
+                            0,
+                            nullptr,
+                            CREATE_NEW,
+                            FILE_ATTRIBUTE_NORMAL,
+                            nullptr);
+
+        if (hFile == INVALID_HANDLE_VALUE) {
+            ec.assign(GetLastError(), std::system_category());
+            return false;
+        }
+        else {
+            ec.clear();
+            return true;
+        }
+    }
+
+    bool write_data(const char* data, DWORD len, std::error_code& ec) noexcept {
+        if (!WriteFile(hFile, data, len, nullptr, nullptr)) {
+            ec.assign(GetLastError(), std::system_category());
+            return false;
+        }
+        else {
+            ec.clear();
+            return true;
+        }
+    }
+
+    bool set_file_time(const FILETIME& ft, std::error_code& ec) noexcept {
+        if (!SetFileTime(hFile, nullptr, nullptr, &ft)) {
+            ec.assign(GetLastError(), std::system_category());
+            return false;
+        }
+        else {
+            ec.clear();
+            return true;
+        }
+    }
+};
 
 void save_file_attr_list(const Header& header, const CStr& savPath) {
     std::ofstream out{ savPath.data() };
@@ -365,61 +423,17 @@ bool construct_parent_dirs(char* path, std::error_code& ec) {
     return true;
 }
 
-HANDLE create_new_write_file(CStr& path, std::error_code& ec) noexcept {
-    HANDLE h = CreateFile(path.data(), 
-                        GENERIC_WRITE,
-                        0,
-                        nullptr,
-                        CREATE_NEW,
-                        FILE_ATTRIBUTE_NORMAL,
-                        nullptr);
-
-    if (h == INVALID_HANDLE_VALUE) {
-        ec.assign(GetLastError(), std::system_category());
-    }
-    else {
-        ec.clear();
-    }
-
-    return h;
-}
-
-bool write_to_file(HANDLE hFile, const char* data, DWORD len, std::error_code& ec) noexcept {
-    if (!WriteFile(hFile, data, len, nullptr, nullptr)) {
-        ec.assign(GetLastError(), std::system_category());
-        return false;
-    }
-    else {
-        ec.clear();
-        return true;
-    }
-}
-
-bool set_file_time(HANDLE hFile, const FILETIME& ft, std::error_code& ec) noexcept {
-    if (!SetFileTime(hFile, nullptr, nullptr, &ft)) {
-        ec.assign(GetLastError(), std::system_category());
-        return false;
-    }
-    else {
-        ec.clear();
-        return true;
-    }
-}
-
 template<size_t N>
 void save_single_file_data(const FileAttr& attr, std::ifstream& f, std::array<char, N>& buf, CStr& filePath) {
     uint32_t fileSize = attr.fileSize;
     uint32_t readLen = 0;
     std::error_code ec;
-    HANDLE hFile = INVALID_HANDLE_VALUE;
+    WinFile wf;
     
-    hFile = create_new_write_file(filePath, ec);
-    if (ec) {
+    if (!wf.init(filePath, ec)) {
         std::cerr << "create file failed: `" << filePath.data() << "`, " << ec.message() << "\n";
         return;
     }
-
-    auto finally_close_file = [hFile](){ CloseHandle(hFile); };
 
     while (fileSize > 0) {
         if (fileSize < buf.size()) {
@@ -432,15 +446,15 @@ void save_single_file_data(const FileAttr& attr, std::ifstream& f, std::array<ch
         readLen = f.gcount();
         decode_bytes(buf.data(), readLen);
 
-        if (!write_to_file(hFile, buf.data(), readLen, ec)) {
+        if (!wf.write_data(buf.data(), readLen, ec)) {
             std::cerr << "write to file failed for file `" << filePath.data() << "`, " << ec.message() << "\n";
             return;
         }    
-            
+        
         fileSize -= readLen;
     }
 
-    if (!set_file_time(hFile, attr.lastWriteTime, ec)) {
+    if (!wf.set_file_time(attr.lastWriteTime, ec)) {
         std::cerr << "set last write time failed for file `" << filePath.data() << "`, " << ec.message() << "\n";
     }
 }
@@ -477,6 +491,7 @@ int main(int argc, char* argv[]) {
     }
 
     Header header;
+    HeaderParser parser;
     std::ifstream f;
     
     f.open(argv[1], std::ios::binary);
@@ -485,10 +500,7 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    parse_magic(header, f);
-    parse_version(header, f);
-    parse_each_file_attr(header, f);
-
+    parser.parse(header, f);
     save_file_attr_list(header, "./pak_file_attr_list.txt");
     save_file_data(header, f, argv[2]);
     return 0;
