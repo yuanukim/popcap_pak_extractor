@@ -1,6 +1,6 @@
 /**
  * @author yuanluo2
- * @brief PopCap's .pak file extractor, written in C++11, only works for windows platform.
+ * @brief PopCap's .pak file extractor, written in C++14, only works for windows platform.
  * 
  * a very big thanks to https://github.com/nathaniel-daniel/popcap-pak-rs for giving 
  * the popcap .pak file's format:
