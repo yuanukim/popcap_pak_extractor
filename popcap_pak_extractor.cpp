@@ -28,15 +28,18 @@
 
 #include <iostream>
 #include <fstream>
+#include <string>
 #include <memory>
 #include <algorithm>
 #include <system_error>
+#include <chrono>
 #include <utility>
 #include <vector>
 #include <array>
 #include <cstdint>
-#include <cstring>
 
+using namespace std::chrono;
+using namespace std::string_literals;
 using uchar = unsigned char;
 
 struct FileAttr {
@@ -103,7 +106,7 @@ class HeaderParser {
         decode_bytes(attr.fileName.get(), fileNameLen);
     }
 
-    void parse_file_size(FileAttr& attr, std::ifstream& f) {
+    void parse_file_size(FileAttr& attr, std::ifstream& f) {    
         constexpr uint32_t FILE_SIZE_BYTES = 4;
 
         f.read((char*)(&(attr.fileSize)), FILE_SIZE_BYTES);
@@ -137,37 +140,11 @@ public:
 };
 
 class WinFile {
+    std::string path;
     HANDLE hFile;
 public:
-    WinFile() : hFile{ INVALID_HANDLE_VALUE } {}
-
-    WinFile(const WinFile&) = delete;
-    WinFile& operator=(const WinFile&) = delete;
-
-    WinFile(WinFile&& other) noexcept {
-        if (this != &other) {
-            hFile = other.hFile;
-            other.hFile = INVALID_HANDLE_VALUE;
-        }
-    }
-
-    WinFile& operator=(WinFile&& other) noexcept {
-        if (this != &other) {
-            hFile = other.hFile;
-            other.hFile = INVALID_HANDLE_VALUE;
-        }
-
-        return *this;
-    }
-
-    ~WinFile() noexcept {
-        if (hFile != INVALID_HANDLE_VALUE) {
-            CloseHandle(hFile);
-        }
-    }
-
-    bool init(const char* path, std::error_code& ec) noexcept {
-        hFile = CreateFile(path, 
+    WinFile(const char* _path) : path{ _path } {
+        hFile = CreateFile(_path, 
                             GENERIC_WRITE,
                             0,
                             nullptr,
@@ -176,34 +153,25 @@ public:
                             nullptr);
 
         if (hFile == INVALID_HANDLE_VALUE) {
-            ec.assign(GetLastError(), std::system_category());
-            return false;
-        }
-        else {
-            ec.clear();
-            return true;
+            throw std::system_error(GetLastError(), std::system_category(), "CreateFile() failed for: "s + path);
         }
     }
 
-    bool write_data(const char* data, DWORD len, std::error_code& ec) noexcept {
+    ~WinFile() noexcept {
+        if (hFile != INVALID_HANDLE_VALUE) {
+            CloseHandle(hFile);
+        }
+    }
+
+    void write_data(const char* data, DWORD len) {
         if (!WriteFile(hFile, data, len, nullptr, nullptr)) {
-            ec.assign(GetLastError(), std::system_category());
-            return false;
-        }
-        else {
-            ec.clear();
-            return true;
+            throw std::system_error(GetLastError(), std::system_category(), "WriteFile() failed for: "s + path);
         }
     }
 
-    bool set_file_time(const FILETIME& ft, std::error_code& ec) noexcept {
+    void set_file_time(const FILETIME& ft) {
         if (!SetFileTime(hFile, nullptr, nullptr, &ft)) {
-            ec.assign(GetLastError(), std::system_category());
-            return false;
-        }
-        else {
-            ec.clear();
-            return true;
+            throw std::system_error(GetLastError(), std::system_category(), "SetFileTime() failed for: "s + path);
         }
     }
 };
@@ -214,9 +182,6 @@ void save_file_attr_list(const Header& header, const char* savPath) {
     for (const FileAttr& attr : header.fileAttrList) {
         out << attr.fileName.get() << ", " << attr.fileSize << "\n";
     }
-
-    std::cout << "file attributes are saved at `" << savPath << "`\n";
-    std::cout << "this .pak file has " << header.fileAttrList.size() << " files\n";
 }
 
 bool is_dir_exist(const char* path) {
@@ -227,7 +192,7 @@ bool is_dir_exist(const char* path) {
 }
 
 /*
-    concatenate 2 paths, only for windows platform.
+    concatenate 2 paths, null-terminated. only for windows platform.
 */
 void path_concatenate(std::array<char, MAX_PATH>& buf, const char* parent, const char* sub) {
     bool hasBackslash = false;
@@ -267,7 +232,7 @@ void path_concatenate(std::array<char, MAX_PATH>& buf, const char* parent, const
 /*
     constructs all parent directories of the given path if they're not exist.
 */
-bool construct_parent_dirs(char* path, std::error_code& ec) {
+void construct_parent_dirs(char* path) {
     char* cursor = path;
 
     while (*cursor != '\0') {
@@ -281,8 +246,7 @@ bool construct_parent_dirs(char* path, std::error_code& ec) {
 
             if (!is_dir_exist(path)) {
                 if (!CreateDirectory(path, nullptr)) {
-                    ec.assign(GetLastError(), std::system_category());
-                    return false;
+                    throw std::system_error(GetLastError(), std::system_category(), "CreateDirectory() failed for: "s + path);
                 }
             }
 
@@ -292,22 +256,13 @@ bool construct_parent_dirs(char* path, std::error_code& ec) {
 
         ++cursor;
     }
-
-    ec.clear();
-    return true;
 }
 
 template<size_t N>
 void save_single_file_data(const FileAttr& attr, std::ifstream& f, std::array<char, N>& buf, const char* filePath) {
     uint32_t fileSize = attr.fileSize;
     uint32_t readLen = 0;
-    std::error_code ec;
-    WinFile wf;
-    
-    if (!wf.init(filePath, ec)) {
-        std::cerr << "create file failed: `" << filePath << "`, " << ec.message() << "\n";
-        return;
-    }
+    WinFile wf{ filePath };
 
     while (fileSize > 0) {
         if (fileSize < buf.size()) {
@@ -320,36 +275,22 @@ void save_single_file_data(const FileAttr& attr, std::ifstream& f, std::array<ch
         readLen = f.gcount();
         decode_bytes(buf.data(), readLen);
 
-        if (!wf.write_data(buf.data(), readLen, ec)) {
-            std::cerr << "write to file failed for file `" << filePath << "`, " << ec.message() << "\n";
-            return;
-        }    
-        
+        wf.write_data(buf.data(), readLen);
         fileSize -= readLen;
     }
 
-    if (!wf.set_file_time(attr.lastWriteTime, ec)) {
-        std::cerr << "set last write time failed for file `" << filePath << "`, " << ec.message() << "\n";
-    }
+    wf.set_file_time(attr.lastWriteTime);
 }
 
 void save_file_data(const Header& header, std::ifstream& f, const char* rootPath) {
     std::array<char, 8192> buf;
     std::array<char, MAX_PATH> pathBuf;
-    std::error_code ec;   // C++11 's std::error_code is very fit for operating system api.
 
     for (const FileAttr& attr : header.fileAttrList) {
         path_concatenate(pathBuf, rootPath, attr.fileName.get());
-        
-        if (!construct_parent_dirs(pathBuf.data(), ec)) {
-            std::cerr << "create dir failed for `" << pathBuf.data() << "`, " << ec.message() << "\n";
-            continue;
-        }
-
+        construct_parent_dirs(pathBuf.data());
         save_single_file_data(attr, f, buf, pathBuf.data());
     }
-
-    std::cout << "files data are saved at `" << rootPath << "`\n";
 }
 
 int main(int argc, char* argv[]) {
@@ -368,6 +309,7 @@ int main(int argc, char* argv[]) {
     Header header;
     HeaderParser parser;
     std::ifstream f;
+    const char* fileAttrListSavPath = "./pak_file_attr_list.txt";
     
     f.open(argv[1], std::ios::binary);
     if (!f.is_open()) {
@@ -375,8 +317,20 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    auto beginTime = system_clock::now();
     parser.parse(header, f);
-    save_file_attr_list(header, "./pak_file_attr_list.txt");
+    auto parseFinish = system_clock::now();
+
+    save_file_attr_list(header, fileAttrListSavPath);
+    std::cout << "file attributes are saved at `" << fileAttrListSavPath << "`\n";
+    std::cout << header.fileAttrList.size() << " files are found in `" << argv[1] << "`\n";
+
     save_file_data(header, f, argv[2]);
+    std::cout << "files data are saved at directory `./" << argv[2] << "`\n";
+    auto saveFinish = system_clock::now();
+
+    std::cout << "\n";
+    std::cout << "parse time cost: " << duration_cast<milliseconds>(parseFinish - beginTime).count() << "ms\n";
+    std::cout << "save time cost: " << duration_cast<milliseconds>(saveFinish - parseFinish).count() << "ms\n";
     return 0;
 }
