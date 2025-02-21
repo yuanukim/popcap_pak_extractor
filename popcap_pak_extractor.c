@@ -1,6 +1,25 @@
 /*
     @author yuanluo2
     @brief popcap's .pak file extractor written in C99, no 3rd parties, only works for windows platform.
+	
+	a very big thanks to https://github.com/nathaniel-daniel/popcap-pak-rs for giving 
+	the popcap .pak file's format:
+	
+		Header 
+		4 bytes - Magic (Should be [0xc0, 0x4a, 0xc0, 0xba])
+		4 bytes - Version (Should be all 0) 
+		loop 
+			1 byte  - Record Flag (exit loop if 0x80)
+			1 byte  - File name length (N) 
+			N bytes - Filename 
+			4 bytes - Filesize (u32)
+			4 bytes - Last write time (Microsoft FILETIME struct)
+		end
+		
+		Body
+		for each record
+			record.filesize bytes - File data
+		end
 */
 #define WIN32_LEAN_AND_MEAN
 
