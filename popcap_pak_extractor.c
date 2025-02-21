@@ -30,33 +30,32 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-typedef struct FileAttr      FileAttr;
-typedef struct FileAttrList  FileAttrList;
-typedef struct PakHeader     PakHeader;
-
 #define BYTES_OF_MAGIC       4
 #define BYTES_OF_VERSION     4
 #define BYTES_OF_FILE_SIZE   4
 #define BYTES_OF_FILE_TIME   sizeof(FILETIME)
 
-struct FileAttr {
+typedef struct FileAttr {
     char* fileName;
     uint32_t fileSize;
     FILETIME lastWriteTime;
-    FileAttr* next;
-};
+	
+    struct FileAttr* next;
+} FileAttr;
 
-struct FileAttrList {
+typedef struct FileAttrList {
     FileAttr* head;
     FileAttr* tail;
+	
     uint32_t length;
-};
+} FileAttrList;
 
-struct PakHeader {
+typedef struct PakHeader {
     UCHAR magic[BYTES_OF_MAGIC];
     UCHAR version[BYTES_OF_VERSION];
+	
     FileAttrList* attrList;
-};
+} PakHeader;
 
 FileAttrList* file_attr_list_create(void) {
     FileAttrList* list = (FileAttrList*)malloc(sizeof(FileAttrList));
