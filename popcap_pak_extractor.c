@@ -6,6 +6,7 @@
 
 #include <windows.h>
 #include <stdio.h>
+#include <stdarg.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <stdbool.h>
@@ -90,37 +91,27 @@ void pak_header_destroy(PakHeader* ph) {
 }
 
 /***************** parsing. ****************/
-static inline
-UCHAR parsing_decode_one_byte(char c) {
-    return (UCHAR)(c ^ 0xf7);
-}
+#define parsing_decode_one_byte(ch) \
+    (UCHAR)((ch) ^ 0xf7)
 
-void parsing_decode_bytes(const char* fromBuf, char* toBuf, uint32_t length) {
-    uint32_t i = 0;
 
-    for (i = 0; i < length; ++i) {
-        toBuf[i] = parsing_decode_one_byte(fromBuf[i]);
-    }
-}
+#define parsing_decode_bytes(fromBuf, toBuf, length) do { \
+    for (uint32_t i = 0; i < (length); ++i) { \
+        toBuf[i] = parsing_decode_one_byte(fromBuf[i]); \
+    } \
+} while(0)
 
-void parsing_decode_bytes_uchar(const UCHAR* fromBuf, UCHAR* toBuf, uint32_t length) {
-    uint32_t i = 0;
-
-    for (i = 0; i < length; ++i) {
-        toBuf[i] = parsing_decode_one_byte((char)fromBuf[i]);
-    }
-}
 
 /* must be 0xc0, 0x4a, 0xc0, 0xba. */
 void parsing_parse_magic(FILE* pakFile, PakHeader* header) {
     fread(header->magic, sizeof(UCHAR), BYTES_OF_MAGIC, pakFile);
-    parsing_decode_bytes_uchar(header->magic, header->magic, BYTES_OF_MAGIC);
+    parsing_decode_bytes(header->magic, header->magic, BYTES_OF_MAGIC);
 }
 
 /* must be 0x00, 0x00, 0x00, 0x00. */
 void parsing_parse_version(FILE* pakFile, PakHeader* header) {
     fread(header->version, sizeof(UCHAR), BYTES_OF_VERSION, pakFile);
-    parsing_decode_bytes_uchar(header->version, header->version, BYTES_OF_VERSION);
+    parsing_decode_bytes(header->version, header->version, BYTES_OF_VERSION);
 }
 
 bool parsing_reach_pak_header_end(FILE* pakFile) {
@@ -149,14 +140,14 @@ void parsing_parse_file_size(FILE* pakFile, FileAttr* attr) {
     UCHAR* buf = (UCHAR*)(&(attr->fileSize));
     
     fread(buf, sizeof(UCHAR), BYTES_OF_FILE_SIZE, pakFile);
-    parsing_decode_bytes_uchar(buf, buf, BYTES_OF_FILE_SIZE);
+    parsing_decode_bytes(buf, buf, BYTES_OF_FILE_SIZE);
 }
 
 void parsing_parse_file_last_write_time(FILE* pakFile, FileAttr* attr) {
     UCHAR* buf = (UCHAR*)(&(attr->lastWriteTime));
 
     fread(buf, sizeof(UCHAR), BYTES_OF_FILE_TIME, pakFile);
-    parsing_decode_bytes_uchar(buf, buf, BYTES_OF_FILE_TIME);
+    parsing_decode_bytes(buf, buf, BYTES_OF_FILE_TIME);
 }
 
 void parsing_parse_all_file_attrs(FILE* pakFile, PakHeader* header) {
@@ -214,13 +205,13 @@ bool is_dir_exist(const char* path) {
          (dwAttrib & FILE_ATTRIBUTE_DIRECTORY));
 }
 
-// create all parent directories from the given path.
+/* create all parent directories from the given path. */
 bool recursive_create_parent_dirs(char* path) {
     char* cursor = path;
 
     while (*cursor != '\0') {
         if (*cursor == '\\') {
-            // split a substr here, just make it ends with '\0'.
+            /* split a substr here, just make it ends with '\0'. */
             *cursor = '\0';
 
             if (!is_dir_exist(path)) {
@@ -229,7 +220,7 @@ bool recursive_create_parent_dirs(char* path) {
                 }
             }
 
-            // setting back.
+            /* setting back. */
             *cursor = '\\';
         }
 
@@ -237,6 +228,25 @@ bool recursive_create_parent_dirs(char* path) {
     }
 
     return true;
+}
+
+/*
+	same usage as fprintf, but this function would print the error message 
+	associated with the error code.
+*/
+void win_log_err(FILE* stream, DWORD errorCode, const char* fmt, ...) {
+    LPSTR message;
+    va_list args;
+
+    FormatMessageA(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS | FORMAT_MESSAGE_MAX_WIDTH_MASK,
+                                 NULL, errorCode, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), (LPSTR)&message, 0, NULL);
+
+    va_start(args, fmt);
+    vfprintf(stream, fmt, args);
+    fprintf(stream, ", %s\n", message);
+    va_end(args);
+
+    LocalFree(message);
 }
 
 void extract_one_file(FILE* pakFile, FileAttr* attr, const char* extractPath, char* buf, size_t len) {
@@ -258,7 +268,7 @@ void extract_one_file(FILE* pakFile, FileAttr* attr, const char* extractPath, ch
                                 NULL);
         
     if (hFile == INVALID_HANDLE_VALUE) {
-        fprintf(stderr, "CreateFile() failed on `%s`, stop.\n", path);
+        win_log_err(stderr, GetLastError(), "CreateFile() failed on `%s`, stop.\n", path);
         return;
     }
 
@@ -276,7 +286,7 @@ void extract_one_file(FILE* pakFile, FileAttr* attr, const char* extractPath, ch
         parsing_decode_bytes(buf, buf, readLen);
         
         if (!WriteFile(hFile, buf, readLen, NULL, NULL)) {
-            fprintf(stderr, "WriteFile() failed, stop.\n");
+            win_log_err(stderr, GetLastError(), "WriteFile() failed, stop.\n");
             goto tidy_up;
         }
 
@@ -284,7 +294,7 @@ void extract_one_file(FILE* pakFile, FileAttr* attr, const char* extractPath, ch
     }
 
     if (!SetFileTime(hFile, NULL, NULL, &(attr->lastWriteTime))) {
-        fprintf(stderr, "SetFileTime() failed, stop.\n");
+        win_log_err(stderr, GetLastError(), "SetFileTime() failed, stop.\n");
         goto tidy_up;
     }
 
@@ -316,7 +326,7 @@ void save_file_name_list(const PakHeader* header, const char* savPath) {
     FileAttr* cursor = header->attrList->head->next;
 
     while (cursor != NULL) {
-        fprintf(savFile, "%s, %d\n", cursor->fileName, cursor->fileSize);
+        fprintf(savFile, "%s, %d bytes\n", cursor->fileName, cursor->fileSize);
         cursor = cursor->next;
     }
 
