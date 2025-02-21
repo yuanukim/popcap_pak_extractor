@@ -180,7 +180,7 @@ void save_file_attr_list(const Header& header, const char* savPath) {
     std::ofstream out{ savPath };
 
     for (const FileAttr& attr : header.fileAttrList) {
-        out << attr.fileName.get() << ", " << attr.fileSize << "\n";
+        out << attr.fileName.get() << ", " << attr.fileSize << " bytes\n";
     }
 }
 
