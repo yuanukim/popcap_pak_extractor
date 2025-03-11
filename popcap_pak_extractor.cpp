@@ -59,13 +59,13 @@ struct Header {
 };
 
 template<typename CharType>
-uchar decode_one_byte(CharType c) {
+uchar decode_one_byte(CharType c) noexcept {
     // using 0xf7 to decode the data in .pak file.
     return static_cast<uchar>(c ^ 0xf7);
 }
 
 template<typename CharType>
-void decode_bytes(CharType* data, size_t len) {
+void decode_bytes(CharType* data, size_t len) noexcept {
     for (size_t i = 0; i < len; ++i) {
         data[i] = decode_one_byte(data[i]);
     }
@@ -144,7 +144,7 @@ class WinFile {
     HANDLE hFile;
 public:
     WinFile(const char* _path) : path{ _path } {
-        hFile = CreateFile(_path, 
+        hFile = CreateFileA(_path, 
                             GENERIC_WRITE,
                             0,
                             nullptr,
@@ -153,11 +153,12 @@ public:
                             nullptr);
 
         if (hFile == INVALID_HANDLE_VALUE) {
-            throw std::system_error(GetLastError(), std::system_category(), "CreateFile() failed for: "s + path);
+            auto ec = GetLastError();
+            throw std::system_error(ec, std::system_category(), "CreateFile() failed for: "s + path);
         }
     }
 
-    ~WinFile() noexcept {
+    ~WinFile() {
         if (hFile != INVALID_HANDLE_VALUE) {
             CloseHandle(hFile);
         }
@@ -165,13 +166,15 @@ public:
 
     void write_data(const char* data, DWORD len) {
         if (!WriteFile(hFile, data, len, nullptr, nullptr)) {
-            throw std::system_error(GetLastError(), std::system_category(), "WriteFile() failed for: "s + path);
+            auto ec = GetLastError();
+            throw std::system_error(ec, std::system_category(), "WriteFile() failed for: "s + path);
         }
     }
 
     void set_file_time(const FILETIME& ft) {
         if (!SetFileTime(hFile, nullptr, nullptr, &ft)) {
-            throw std::system_error(GetLastError(), std::system_category(), "SetFileTime() failed for: "s + path);
+            auto ec = GetLastError();
+            throw std::system_error(ec, std::system_category(), "SetFileTime() failed for: "s + path);
         }
     }
 };
@@ -184,8 +187,8 @@ void save_file_attr_list(const Header& header, const char* savPath) {
     }
 }
 
-bool is_dir_exist(const char* path) {
-    DWORD dwAttrib = GetFileAttributes(path);
+bool is_dir_exist(const char* path) noexcept {
+    DWORD dwAttrib = GetFileAttributesA(path);
 
     return (dwAttrib != INVALID_FILE_ATTRIBUTES && 
             (dwAttrib & FILE_ATTRIBUTE_DIRECTORY));
@@ -194,7 +197,7 @@ bool is_dir_exist(const char* path) {
 /*
     concatenate 2 paths, null-terminated. only for windows platform.
 */
-void path_concatenate(std::array<char, MAX_PATH>& buf, const char* parent, const char* sub) {
+void path_concatenate(std::array<char, MAX_PATH>& buf, const char* parent, const char* sub) noexcept {
     bool hasBackslash = false;
     char* cursor = buf.data();
 
@@ -245,8 +248,9 @@ void construct_parent_dirs(char* path) {
             *cursor = '\0';
 
             if (!is_dir_exist(path)) {
-                if (!CreateDirectory(path, nullptr)) {
-                    throw std::system_error(GetLastError(), std::system_category(), "CreateDirectory() failed for: "s + path);
+                if (!CreateDirectoryA(path, nullptr)) {
+                    auto ec = GetLastError();
+                    throw std::system_error(ec, std::system_category(), "CreateDirectory() failed for: "s + path);
                 }
             }
 
@@ -293,17 +297,17 @@ void save_file_data(const Header& header, std::ifstream& f, const char* rootPath
     }
 }
 
-int main(int argc, char* argv[]) {
+void pak_extractor_entrance(int argc, char* argv[]) {
     if (argc != 3) {
         std::cerr << "If you have a .pak file called `main.pak`, and you want to \n";
         std::cerr << "extract it to a dir called `sav`, then usage is: ";
         std::cerr << argv[0] << " main.pak sav\n";
-        return 0;
+        return;
     }
 
     if (is_dir_exist(argv[2])) {
-        std::cerr << "given dir is exists: `" << argv[2] << "`\n";
-        return 1;
+        std::cerr << "given dir is already exists: `" << argv[2] << "`\n";
+        return;
     }
 
     Header header;
@@ -314,7 +318,7 @@ int main(int argc, char* argv[]) {
     f.open(argv[1], std::ios::binary);
     if (!f.is_open()) {
         std::cerr << "can't open file: `" << argv[1] << "`\n";
-        return 1;
+        return;
     }
 
     auto beginTime = system_clock::now();
@@ -332,5 +336,16 @@ int main(int argc, char* argv[]) {
     std::cout << "\n";
     std::cout << "parse time cost: " << duration_cast<milliseconds>(parseFinish - beginTime).count() << "ms\n";
     std::cout << "save time cost: " << duration_cast<milliseconds>(saveFinish - parseFinish).count() << "ms\n";
+}
+
+int main(int argc, char* argv[]) {
+    try {
+        pak_extractor_entrance(argc, argv);
+    }
+    catch(const std::exception& e) {
+        std::cerr << "unexpected error, " << e.what() << ", program quits.\n";
+        return 1;
+    }
+
     return 0;
 }
