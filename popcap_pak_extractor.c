@@ -1,5 +1,5 @@
 /*
-    @author yuanluo2
+    @author yuanshixi
     @brief popcap's .pak file extractor written in C99, no 3rd parties, only works for windows platform.
 	
 	a very big thanks to https://github.com/nathaniel-daniel/popcap-pak-rs for giving 
@@ -28,7 +28,6 @@
 #include <stdarg.h>
 #include <stdlib.h>
 #include <stdint.h>
-#include <stdbool.h>
 
 #define BYTES_OF_MAGIC       4
 #define BYTES_OF_VERSION     4
@@ -37,7 +36,7 @@
 
 typedef struct FileAttr {
     char* fileName;
-    uint32_t fileSize;
+    int32_t fileSize;   /* here, must using 4 bytes integer. */
     FILETIME lastWriteTime;
 	
     struct FileAttr* next;
@@ -47,7 +46,7 @@ typedef struct FileAttrList {
     FileAttr* head;
     FileAttr* tail;
 	
-    uint32_t length;
+    int32_t length;
 } FileAttrList;
 
 typedef struct PakHeader {
@@ -59,10 +58,17 @@ typedef struct PakHeader {
 
 FileAttrList* file_attr_list_create(void) {
     FileAttrList* list = (FileAttrList*)malloc(sizeof(FileAttrList));
+	if (list == NULL) {
+		return NULL;
+	}
 
     list->head = (FileAttr*)malloc(sizeof(FileAttr));
+	if (list->head == NULL) {
+		free(list);
+		return NULL;
+	}
+	
     list->head->next = NULL;
-
     list->tail = list->head;
     list->length = 0;
 
@@ -96,8 +102,11 @@ void file_attr_list_add_back(FileAttrList* list, FileAttr* attr) {
 
 PakHeader* pak_header_create(void) {
     PakHeader* ph = (PakHeader*)malloc(sizeof(PakHeader));
-    ph->attrList = file_attr_list_create();
-
+	
+	if (ph != NULL) {
+		ph->attrList = file_attr_list_create();
+	}
+	
     return ph;
 }
 
@@ -108,90 +117,161 @@ void pak_header_destroy(PakHeader* ph) {
     }
 }
 
-/***************** parsing. ****************/
-#define parsing_decode_one_byte(ch) \
+#define decode_one_byte(ch) \
     (UCHAR)((ch) ^ 0xf7)
 
 
-#define parsing_decode_bytes(fromBuf, toBuf, length) do { \
-    for (uint32_t i = 0; i < (length); ++i) { \
-        toBuf[i] = parsing_decode_one_byte(fromBuf[i]); \
+#define decode_bytes(fromBuf, toBuf, length) do { \
+    for (int32_t i = 0; i < (length); ++i) { \
+        toBuf[i] = decode_one_byte(fromBuf[i]); \
     } \
 } while(0)
 
 
+int32_t read_file(void *ptr, size_t size, size_t nmemb, FILE *stream) {
+	size_t readLen = fread(ptr, size, nmemb, stream);
+	
+	if (readLen < nmemb && ferror(stream)) {
+		return -1;
+	}
+	else {
+		return readLen;
+	}
+}
+
 /* must be 0xc0, 0x4a, 0xc0, 0xba. */
-void parsing_parse_magic(FILE* pakFile, PakHeader* header) {
-    fread(header->magic, sizeof(UCHAR), BYTES_OF_MAGIC, pakFile);
-    parsing_decode_bytes(header->magic, header->magic, BYTES_OF_MAGIC);
+int parse_magic(FILE* pakFile, PakHeader* header) {
+    if (read_file(header->magic, sizeof(UCHAR), BYTES_OF_MAGIC, pakFile) < 0) {
+		return 0;
+	}
+	
+    decode_bytes(header->magic, header->magic, BYTES_OF_MAGIC);
+	return 1;
 }
 
 /* must be 0x00, 0x00, 0x00, 0x00. */
-void parsing_parse_version(FILE* pakFile, PakHeader* header) {
-    fread(header->version, sizeof(UCHAR), BYTES_OF_VERSION, pakFile);
-    parsing_decode_bytes(header->version, header->version, BYTES_OF_VERSION);
+int parse_version(FILE* pakFile, PakHeader* header) {
+    if (read_file(header->version, sizeof(UCHAR), BYTES_OF_VERSION, pakFile) < 0) {
+		return 0;
+	}
+	
+    decode_bytes(header->version, header->version, BYTES_OF_VERSION);
+	return 1;
 }
 
-bool parsing_reach_pak_header_end(FILE* pakFile) {
+int reach_pak_header_end(FILE* pakFile) {
     UCHAR flag;
-    fread(&flag, sizeof(UCHAR), 1, pakFile);
-    return parsing_decode_one_byte(flag) == 0x80;
+	
+    if (read_file(&flag, sizeof(UCHAR), 1, pakFile) < 0) {
+		return -1;
+	}
+	else {
+		return decode_one_byte(flag) == 0x80;
+	}
 }
 
-void parsing_parse_file_name(FILE* pakFile, FileAttr* attr) {
+int parse_file_name(FILE* pakFile, FileAttr* attr) {
     UCHAR byte;
-    uint32_t filenameLen;
+    int32_t filenameLen;
 
     /* get the length of the file name. */
-    fread(&byte, sizeof(UCHAR), 1, pakFile);
-    filenameLen = (uint32_t)parsing_decode_one_byte(byte);
+    if (read_file(&byte, sizeof(UCHAR), 1, pakFile) < 0) {
+		return 0;
+	}
+	
+    filenameLen = (int32_t)decode_one_byte(byte);
 
     /* get the file name. */
     attr->fileName = (char*)malloc((filenameLen + 1) * sizeof(char));
-    attr->fileName[filenameLen] = '\0';
+	if (attr->fileName == NULL) {
+		return 0;
+	}
 
-    fread(attr->fileName, sizeof(char), filenameLen, pakFile);
-    parsing_decode_bytes(attr->fileName, attr->fileName, filenameLen);
+    if (read_file(attr->fileName, sizeof(char), filenameLen, pakFile) < 0) {
+		free(attr->fileName);
+		return 0;
+	}
+	
+	attr->fileName[filenameLen] = '\0';
+    decode_bytes(attr->fileName, attr->fileName, filenameLen);
+	return 1;
 }
 
-void parsing_parse_file_size(FILE* pakFile, FileAttr* attr) {
+int parse_file_size(FILE* pakFile, FileAttr* attr) {
     UCHAR* buf = (UCHAR*)(&(attr->fileSize));
     
-    fread(buf, sizeof(UCHAR), BYTES_OF_FILE_SIZE, pakFile);
-    parsing_decode_bytes(buf, buf, BYTES_OF_FILE_SIZE);
+    if (read_file(buf, sizeof(UCHAR), BYTES_OF_FILE_SIZE, pakFile) < 0) {
+		return 0;
+	}
+	
+    decode_bytes(buf, buf, BYTES_OF_FILE_SIZE);
+	return 1;
 }
 
-void parsing_parse_file_last_write_time(FILE* pakFile, FileAttr* attr) {
+int parse_file_last_write_time(FILE* pakFile, FileAttr* attr) {
     UCHAR* buf = (UCHAR*)(&(attr->lastWriteTime));
 
-    fread(buf, sizeof(UCHAR), BYTES_OF_FILE_TIME, pakFile);
-    parsing_decode_bytes(buf, buf, BYTES_OF_FILE_TIME);
+    if (read_file(buf, sizeof(UCHAR), BYTES_OF_FILE_TIME, pakFile) < 0) {
+		return 0;
+	}
+	
+    decode_bytes(buf, buf, BYTES_OF_FILE_TIME);
+	return 1;
 }
 
-void parsing_parse_all_file_attrs(FILE* pakFile, PakHeader* header) {
+int parse_all_file_attrs(FILE* pakFile, PakHeader* header) {
+	int ret;
+	
     while (!feof(pakFile)) {
-        if (parsing_reach_pak_header_end(pakFile)) {
-            break;
-        }
+		ret = reach_pak_header_end(pakFile);
+        if (ret < 0) {
+			return 0;
+		}
+		else if (ret > 0) {
+			break;
+		}
 
         FileAttr* attr = (FileAttr*)malloc(sizeof(FileAttr));
+		if (attr == NULL) {
+			return 0;
+		}
+		
         attr->next = NULL;
 
-        parsing_parse_file_name(pakFile, attr);
-        parsing_parse_file_size(pakFile, attr);
-        parsing_parse_file_last_write_time(pakFile, attr);
+        ret = parse_file_name(pakFile, attr) 
+			&& parse_file_size(pakFile, attr) 
+			&& parse_file_last_write_time(pakFile, attr);
+
+		if (!ret) {
+			free(attr);
+			return 0;
+		}
 
         file_attr_list_add_back(header->attrList, attr);
     }
+	
+	return 1;
 }
 
-void parsing_parse_pak_header(FILE* pakFile, PakHeader* header) {
-    parsing_parse_magic(pakFile, header);
-    parsing_parse_version(pakFile, header);
-    parsing_parse_all_file_attrs(pakFile, header);
+int parse_pak_header(FILE* pakFile, PakHeader* header) {
+	if (!parse_magic(pakFile, header)) {
+		fprintf(stderr, "parse Magic with given .pak file failed.\n");
+		return 0;
+	}
+
+	if (!parse_version(pakFile, header)) {
+		fprintf(stderr, "parse Version with given .pak file failed.\n");
+		return 0;
+	}
+	
+	if (!parse_all_file_attrs(pakFile, header)) {
+		fprintf(stderr, "parse all file attributes with given .pak file failed.\n");
+		return 0;
+	}
+    
+	return 1;
 }
 
-/***************** saving. ****************/
 void build_complete_path(char* buf, const char* extractPath, const char* fileName) {
     while (*extractPath != '\0') {
         *buf = *extractPath;
@@ -216,7 +296,7 @@ void build_complete_path(char* buf, const char* extractPath, const char* fileNam
     *buf = '\0';
 }
 
-bool is_dir_exist(const char* path) {
+int is_dir_exist(const char* path) {
   DWORD dwAttrib = GetFileAttributes(path);
 
   return (dwAttrib != INVALID_FILE_ATTRIBUTES && 
@@ -224,7 +304,7 @@ bool is_dir_exist(const char* path) {
 }
 
 /* create all parent directories from the given path. */
-bool recursive_create_parent_dirs(char* path) {
+int recursive_create_parent_dirs(char* path) {
     char* cursor = path;
 
     while (*cursor != '\0') {
@@ -234,7 +314,7 @@ bool recursive_create_parent_dirs(char* path) {
 
             if (!is_dir_exist(path)) {
                 if (!CreateDirectory(path, NULL)) {
-                    return FALSE;
+                    return 0;
                 }
             }
 
@@ -245,7 +325,7 @@ bool recursive_create_parent_dirs(char* path) {
         ++cursor;
     }
 
-    return true;
+    return 1;
 }
 
 /*
@@ -253,28 +333,69 @@ bool recursive_create_parent_dirs(char* path) {
 	associated with the error code.
 */
 void win_log_err(FILE* stream, DWORD errorCode, const char* fmt, ...) {
-    LPSTR message;
+	LPSTR message;
+	DWORD ret = FormatMessageA(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS | FORMAT_MESSAGE_MAX_WIDTH_MASK,
+							 NULL, errorCode, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), (LPSTR)&message, 0, NULL);
+							 
     va_list args;
 
-    FormatMessageA(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS | FORMAT_MESSAGE_MAX_WIDTH_MASK,
-                                 NULL, errorCode, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), (LPSTR)&message, 0, NULL);
+	va_start(args, fmt);
+	vfprintf(stream, fmt, args);
+	fprintf(stream, ", windows error code is %d", ret);
+	
+	if (ret != 0) {
+		fprintf(stream, ", %s", message);
+		LocalFree(message);
+	}
 
-    va_start(args, fmt);
-    vfprintf(stream, fmt, args);
-    fprintf(stream, ", %s\n", message);
-    va_end(args);
-
-    LocalFree(message);
+	fprintf(stream, "\n");
+	va_end(args);
 }
 
-void extract_one_file(FILE* pakFile, FileAttr* attr, const char* extractPath, char* buf, size_t len) {
+int save_one_file_data(FILE* pakFile, FileAttr* attr, HANDLE hFile, char* buf, size_t len) {
+	int32_t fileSize = attr->fileSize;
+    int32_t readLen;
+    
+    while (fileSize > 0) {
+        if (fileSize < len) {
+            if ((readLen = read_file(buf, sizeof(char), fileSize, pakFile)) < 0) {
+				fprintf(stderr, "read from .pak file meets error.\n");
+				return 0;
+			}
+        }
+        else {
+            if ((readLen = read_file(buf, sizeof(char), len, pakFile)) < 0) {
+				fprintf(stderr, "read from .pak file meets error.\n");
+				return 0;
+			}
+        }
+
+        decode_bytes(buf, buf, readLen);
+        
+        if (!WriteFile(hFile, buf, readLen, NULL, NULL)) {
+            win_log_err(stderr, GetLastError(), "WriteFile() failed, stop.\n");
+            return 0;
+        }
+
+        fileSize -= readLen;
+    }
+
+    if (!SetFileTime(hFile, NULL, NULL, &(attr->lastWriteTime))) {
+        win_log_err(stderr, GetLastError(), "SetFileTime() failed, stop.\n");
+        return 0;
+    }
+	
+	return 1;
+}
+
+int extract_one_file(FILE* pakFile, FileAttr* attr, const char* extractPath, char* buf, size_t len) {
     char path[MAX_PATH];
     
     build_complete_path(path, extractPath, attr->fileName);
     
     if (!recursive_create_parent_dirs(path)) {
         fprintf(stderr, "can't create parent dirs for `%s`, stop.\n", path);
-        return;
+        return 0;
     }
 
     HANDLE hFile = CreateFile(path, 
@@ -287,58 +408,43 @@ void extract_one_file(FILE* pakFile, FileAttr* attr, const char* extractPath, ch
         
     if (hFile == INVALID_HANDLE_VALUE) {
         win_log_err(stderr, GetLastError(), "CreateFile() failed on `%s`, stop.\n", path);
-        return;
+        return 0;
     }
 
-    uint32_t fileSize = attr->fileSize;
-    uint32_t readLen;
-    
-    while (fileSize > 0) {
-        if (fileSize < len) {
-            readLen = fread(buf, sizeof(char), fileSize, pakFile);
-        }
-        else {
-            readLen = fread(buf, sizeof(char), len, pakFile);
-        }
-
-        parsing_decode_bytes(buf, buf, readLen);
-        
-        if (!WriteFile(hFile, buf, readLen, NULL, NULL)) {
-            win_log_err(stderr, GetLastError(), "WriteFile() failed, stop.\n");
-            goto tidy_up;
-        }
-
-        fileSize -= readLen;
-    }
-
-    if (!SetFileTime(hFile, NULL, NULL, &(attr->lastWriteTime))) {
-        win_log_err(stderr, GetLastError(), "SetFileTime() failed, stop.\n");
-        goto tidy_up;
-    }
-
-tidy_up:
+    int ret = save_one_file_data(pakFile, attr, hFile, buf, len);
     CloseHandle(hFile);
+	return ret;
 }
 
-void extract_files(FILE* pakFile, const PakHeader* header, const char* extractPath) {
+int extract_files(FILE* pakFile, const PakHeader* header, const char* extractPath) {
     FileAttr* cursor = header->attrList->head->next;
     size_t buf_size = 8192;
     char* buf = (char*)malloc(buf_size * sizeof(char));
+	
+	if (buf == NULL) {
+		fprintf(stderr, "no enough memory, extract files failed.\n");
+		return 0;
+	}
 
     while (cursor != NULL) {
-        extract_one_file(pakFile, cursor, extractPath, buf, buf_size);
+        if (!extract_one_file(pakFile, cursor, extractPath, buf, buf_size)) {
+			free(buf);
+			fprintf(stderr, "extract inner file failed: %s\n", extractPath);
+			return 0;
+		}
+		
         cursor = cursor->next;
     }
 
     free(buf);
-    printf("extract success, files are saved at `%s`.\n", extractPath);
+	return 1;
 }
 
-void save_file_name_list(const PakHeader* header, const char* savPath) {
+int save_file_name_list(const PakHeader* header, const char* savPath) {
     FILE* savFile = fopen(savPath, "w");
     if (savFile == NULL) {
         fprintf(stderr, "can't save file name list to %s\n", savPath);
-        return;
+        return 0;
     }
 
     FileAttr* cursor = header->attrList->head->next;
@@ -349,7 +455,7 @@ void save_file_name_list(const PakHeader* header, const char* savPath) {
     }
 
     fclose(savFile);
-    printf("file name list is saved at `%s`.\n", savPath);
+	return 1;
 }
 
 int main(int argc, char* argv[]) {
@@ -368,17 +474,48 @@ int main(int argc, char* argv[]) {
     FILE* pakFile = fopen(argv[1], "rb");
     if (pakFile == NULL) {
         fprintf(stderr, "can't open %s, stop.\n", argv[1]);
-        return 1;
+        goto finally;
     }
-
+	
     PakHeader* ph = pak_header_create();
-    parsing_parse_pak_header(pakFile, ph);
+	if (ph == NULL) {
+		fprintf(stderr, "no enough memory.\n");
+		goto finally;
+	}
+	
+    if (!parse_pak_header(pakFile, ph)) {
+		fprintf(stderr, "parse .pak header failed.\n");
+		goto finally;
+	}
 
     printf("\n%s has %d files.\n", argv[1], ph->attrList->length);
-    save_file_name_list(ph, "pak_file_names.txt");
-    extract_files(pakFile, ph, argv[2]);
+	
+	const char* savFileNameListPath = "pak_file_names.txt";
+	
+    if (!save_file_name_list(ph, savFileNameListPath)) {
+		fprintf(stderr, "save file name list failed.\n");
+		goto finally;
+	}
+	else {
+		printf("file name list is saved at %s.\n", savFileNameListPath);
+	}
+	
+    if (!extract_files(pakFile, ph, argv[2])) {
+		fprintf(stderr, "extract files failed.\n");
+		goto finally;
+	}
+	else {
+		printf("extract success, files are saved at %s.\n", argv[2]);
+	}
 
-    pak_header_destroy(ph);
-    fclose(pakFile);
+finally:
+	if (ph != NULL) {
+		pak_header_destroy(ph);
+	}
+    
+	if (pakFile != NULL) {
+		fclose(pakFile);
+	}
+  
     return 0;
 }
