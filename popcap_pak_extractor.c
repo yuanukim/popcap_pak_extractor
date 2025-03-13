@@ -259,8 +259,28 @@ int parse_pak_header(FILE* pakFile, PakHeader* header) {
 		return 0;
 	}
 
+	int magic_check_success = (header->magic[0] == 0xc0)
+							&& (header->magic[1] == 0x4a)
+							&& (header->magic[2] == 0xc0)
+							&& (header->magic[3] == 0xba);
+	
+	if (!magic_check_success) {
+		fprintf(stderr, "invalid .pak format, Magic check failed.\n");
+		return 0;
+	}
+
 	if (!parse_version(pakFile, header)) {
 		fprintf(stderr, "parse Version with given .pak file failed.\n");
+		return 0;
+	}
+	
+	int version_check_success = (header->version[0] == 0x00)
+								&& (header->version[1] == 0x00)
+								&& (header->version[2] == 0x00)
+								&& (header->version[3] == 0x00);
+	
+	if (!version_check_success) {
+		fprintf(stderr, "invalid .pak format, Version check failed.\n");
 		return 0;
 	}
 	
@@ -300,7 +320,7 @@ int is_dir_exist(const char* path) {
 	DWORD dwAttrib = GetFileAttributes(path);
 
 	return (dwAttrib != INVALID_FILE_ATTRIBUTES && 
-			(dwAttrib & FILE_ATTRIBUTE_DIRECTORY));
+		 (dwAttrib & FILE_ATTRIBUTE_DIRECTORY));
 }
 
 /* create all parent directories from the given path. */
@@ -336,19 +356,17 @@ void win_log_err(FILE* stream, DWORD errorCode, const char* fmt, ...) {
 	LPSTR message;
 	DWORD ret = FormatMessageA(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS | FORMAT_MESSAGE_MAX_WIDTH_MASK,
 							 NULL, errorCode, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), (LPSTR)&message, 0, NULL);
-							 
-	va_list args;
-
-	va_start(args, fmt);
-	vfprintf(stream, fmt, args);
-	fprintf(stream, ", windows error code is %d", ret);
+				
+	fprintf(stream, "windows error code is %d, ", ret);
 	
 	if (ret != 0) {
-		fprintf(stream, ", %s", message);
+		fprintf(stream, "%s ", message);
 		LocalFree(message);
 	}
-
-	fprintf(stream, "\n");
+	
+	va_list args;
+	va_start(args, fmt);
+	vfprintf(stream, fmt, args);
 	va_end(args);
 }
 
@@ -512,10 +530,10 @@ finally:
 	if (ph != NULL) {
 		pak_header_destroy(ph);
 	}
-
+	
 	if (pakFile != NULL) {
 		fclose(pakFile);
 	}
-
+  
 	return 0;
 }
