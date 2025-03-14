@@ -31,6 +31,8 @@
 #include <string>
 #include <memory>
 #include <algorithm>
+#include <stdexcept>
+#include <exception>
 #include <system_error>
 #include <chrono>
 #include <utility>
@@ -48,10 +50,6 @@ struct FileAttr {
     FILETIME lastWriteTime;
 };
 
-/*
-    magic should be 0xC0, 0x4A, 0xC0, 0xBA,
-    version should be all 0x00.
-*/
 struct Header {
     std::array<uchar, 4> magic;
     std::array<uchar, 4> version;
@@ -117,12 +115,33 @@ class HeaderParser {
         f.read((char*)(&(attr.lastWriteTime)), sizeof(FILETIME));
         decode_bytes((char*)(&(attr.lastWriteTime)), sizeof(FILETIME));
     }
+
+    bool check_magic(const Header& header) {
+        return header.magic[0] == 0xC0 
+            && header.magic[1] == 0x4A 
+            && header.magic[2] == 0xC0 
+            && header.magic[3] == 0xBA;
+    }
+
+    bool check_version(const Header& header) {
+        return header.version[0] == 0x00 
+            && header.version[1] == 0x00 
+            && header.version[2] == 0x00 
+            && header.version[3] == 0x00;
+    }
 public:
     HeaderParser() = default;
 
     void parse(Header& header, std::ifstream& f) {
         parse_magic(header, f);
+        if (!check_magic(header)) {
+            throw std::runtime_error{ "invalid .pak file, check Magic failed" };
+        }
+
         parse_version(header, f);
+        if (!check_version(header)) {
+            throw std::runtime_error{ "invalid .pak file, check Version failed" };
+        }
 
         while (!f.eof()) {
             if (is_pak_header_end(f)) {
