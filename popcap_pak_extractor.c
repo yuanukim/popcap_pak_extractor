@@ -34,6 +34,8 @@
 #define BYTES_OF_FILE_SIZE   4
 #define BYTES_OF_FILE_TIME   sizeof(FILETIME)
 
+#define WINDOWS_ERROR_MSG_BUF_SIZE   256
+
 typedef struct FileAttr {
 	char* fileName;
 	int32_t fileSize;   /* here, must using 4 bytes integer. */
@@ -139,7 +141,6 @@ int32_t read_file(void *ptr, size_t size, size_t nmemb, FILE *stream) {
 	}
 }
 
-/* must be 0xc0, 0x4a, 0xc0, 0xba. */
 int parse_magic(FILE* pakFile, PakHeader* header) {
 	if (read_file(header->magic, sizeof(UCHAR), BYTES_OF_MAGIC, pakFile) < 0) {
 		return 0;
@@ -149,7 +150,6 @@ int parse_magic(FILE* pakFile, PakHeader* header) {
 	return 1;
 }
 
-/* must be 0x00, 0x00, 0x00, 0x00. */
 int parse_version(FILE* pakFile, PakHeader* header) {
 	if (read_file(header->version, sizeof(UCHAR), BYTES_OF_VERSION, pakFile) < 0) {
 		return 0;
@@ -349,32 +349,24 @@ int recursive_create_parent_dirs(char* path) {
 }
 
 /*
-	same usage as fprintf, but this function would print the error message 
-	associated with the error code.
+	using windows api to format error code into a human readable message.
+	if this function format failed inside, then print this buf will just show empty.
 */
-void win_log_err(FILE* stream, DWORD errorCode, const char* fmt, ...) {
-	LPSTR message;
-	DWORD ret = FormatMessageA(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS | FORMAT_MESSAGE_MAX_WIDTH_MASK,
-							 NULL, errorCode, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), (LPSTR)&message, 0, NULL);
-				
-	fprintf(stream, "windows error code is %d, ", ret);
-	
-	if (ret != 0) {
-		fprintf(stream, "%s ", message);
-		LocalFree(message);
+void format_windows_error_code(DWORD errCode, char* buf, size_t bufSize) {
+	DWORD success = FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS | FORMAT_MESSAGE_MAX_WIDTH_MASK,
+							 NULL, errCode, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), (LPSTR)buf, bufSize, NULL);
+							 
+	if (success == 0) {
+		buf[0] = '\0';
 	}
-	
-	va_list args;
-	va_start(args, fmt);
-	vfprintf(stream, fmt, args);
-	va_end(args);
 }
 
 int save_one_file_data(FILE* pakFile, FileAttr* attr, HANDLE hFile, char* buf, size_t len) {
 	int32_t fileSize = attr->fileSize;
 	int32_t readLen;
+	char winErrMsg[WINDOWS_ERROR_MSG_BUF_SIZE];
 	
-	while (fileSize > 0) {
+	while (fileSize > 0 && !feof(pakFile)) {
 		if (fileSize < len) {
 			if ((readLen = read_file(buf, sizeof(char), fileSize, pakFile)) < 0) {
 				fprintf(stderr, "read from .pak file meets error.\n");
@@ -391,7 +383,9 @@ int save_one_file_data(FILE* pakFile, FileAttr* attr, HANDLE hFile, char* buf, s
 		decode_bytes(buf, buf, readLen);
 		
 		if (!WriteFile(hFile, buf, readLen, NULL, NULL)) {
-			win_log_err(stderr, GetLastError(), "WriteFile() failed, stop.\n");
+			DWORD errCode = GetLastError();
+			format_windows_error_code(errCode, winErrMsg, sizeof(winErrMsg) / sizeof(char));
+			fprintf(stderr, "WriteFile() failed for %s, windows error code: %d, msg: %s.\n", attr->fileName, errCode, winErrMsg);
 			return 0;
 		}
 
@@ -399,7 +393,9 @@ int save_one_file_data(FILE* pakFile, FileAttr* attr, HANDLE hFile, char* buf, s
 	}
 
 	if (!SetFileTime(hFile, NULL, NULL, &(attr->lastWriteTime))) {
-		win_log_err(stderr, GetLastError(), "SetFileTime() failed, stop.\n");
+		DWORD errCode = GetLastError();
+		format_windows_error_code(errCode, winErrMsg, sizeof(winErrMsg) / sizeof(char));
+		fprintf(stderr, "SetFileTime() failed for %s, windows error code: %d, msg: %s.\n", attr->fileName, errCode, winErrMsg);
 		return 0;
 	}
 	
@@ -408,6 +404,7 @@ int save_one_file_data(FILE* pakFile, FileAttr* attr, HANDLE hFile, char* buf, s
 
 int extract_one_file(FILE* pakFile, FileAttr* attr, const char* extractPath, char* buf, size_t len) {
 	char path[MAX_PATH];
+	char winErrMsg[WINDOWS_ERROR_MSG_BUF_SIZE];
 	
 	build_complete_path(path, extractPath, attr->fileName);
 	
@@ -425,7 +422,9 @@ int extract_one_file(FILE* pakFile, FileAttr* attr, const char* extractPath, cha
 								NULL);
 		
 	if (hFile == INVALID_HANDLE_VALUE) {
-		win_log_err(stderr, GetLastError(), "CreateFile() failed on `%s`, stop.\n", path);
+		DWORD errCode = GetLastError();
+		format_windows_error_code(errCode, winErrMsg, sizeof(winErrMsg) / sizeof(char));
+		fprintf(stderr, "CreateFile() failed on `%s`, windows error code: %d, msg: %s.\n", path, errCode, winErrMsg);
 		return 0;
 	}
 
@@ -440,7 +439,7 @@ int extract_files(FILE* pakFile, const PakHeader* header, const char* extractPat
 	char* buf = (char*)malloc(buf_size * sizeof(char));
 	
 	if (buf == NULL) {
-		fprintf(stderr, "no enough memory, extract files failed.\n");
+		fprintf(stderr, "extract files failed, please make sure that your computer have enough memory before executing this program.\n");
 		return 0;
 	}
 
@@ -491,18 +490,18 @@ int main(int argc, char* argv[]) {
 
 	FILE* pakFile = fopen(argv[1], "rb");
 	if (pakFile == NULL) {
-		fprintf(stderr, "can't open %s, stop.\n", argv[1]);
+		fprintf(stderr, "can't open %s, stop parse.\n", argv[1]);
 		goto finally;
 	}
 	
 	PakHeader* ph = pak_header_create();
 	if (ph == NULL) {
-		fprintf(stderr, "no enough memory.\n");
+		fprintf(stderr, "parse failed, please make sure that your computer have enough memory before executing this program.\n");
 		goto finally;
 	}
 	
 	if (!parse_pak_header(pakFile, ph)) {
-		fprintf(stderr, "parse .pak header failed.\n");
+		fprintf(stderr, "your file: %s, it's not a valid .pak file, can't parse.\n", argv[1]);
 		goto finally;
 	}
 
@@ -511,7 +510,7 @@ int main(int argc, char* argv[]) {
 	const char* savFileNameListPath = "pak_file_names.txt";
 	
 	if (!save_file_name_list(ph, savFileNameListPath)) {
-		fprintf(stderr, "save file name list failed.\n");
+		fprintf(stderr, "save file name list to %s failed.\n", savFileNameListPath);
 		goto finally;
 	}
 	else {
@@ -519,7 +518,7 @@ int main(int argc, char* argv[]) {
 	}
 	
 	if (!extract_files(pakFile, ph, argv[2])) {
-		fprintf(stderr, "extract files failed.\n");
+		fprintf(stderr, "your file: %s, extract its files failed.\n", argv[1]);
 		goto finally;
 	}
 	else {
@@ -534,6 +533,6 @@ finally:
 	if (pakFile != NULL) {
 		fclose(pakFile);
 	}
-  
+
 	return 0;
 }
