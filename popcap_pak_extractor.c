@@ -34,7 +34,7 @@
 #define BYTES_OF_FILE_SIZE   4
 #define BYTES_OF_FILE_TIME   sizeof(FILETIME)
 
-#define WINDOWS_ERROR_MSG_BUF_SIZE   256
+#define WINDOWS_ERROR_MSG_BUF_SIZE   1024
 
 typedef struct FileAttr {
 	char* fileName;
