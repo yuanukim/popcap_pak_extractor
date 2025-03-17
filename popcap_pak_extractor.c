@@ -491,7 +491,7 @@ int main(int argc, char* argv[]) {
 	FILE* pakFile = fopen(argv[1], "rb");
 	if (pakFile == NULL) {
 		fprintf(stderr, "can't open %s, stop parse.\n", argv[1]);
-		goto finally;
+		return 1;
 	}
 	
 	PakHeader* ph = pak_header_create();
