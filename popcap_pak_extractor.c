@@ -42,14 +42,13 @@ typedef enum Err {
 	err_failed,
 	err_out_of_memory,
 	err_file_cannot_read,
-	err_parse_magic,
-	err_parse_version,
-	err_parse_file_name,
-	err_parse_file_size,
-	err_parse_file_last_write_time,
-	err_parse_file_attributes,
-	err_check_magic,
-	err_check_version,
+	err_parse_header_magic,
+	err_parse_header_version,
+	err_parse_header_attr_file_name,
+	err_parse_header_attr_file_size,
+	err_parse_header_attr_file_last_write_time,
+	err_check_header_magic,
+	err_check_header_version,
 	err_create_parent_dirs,
 	err_os_windows_api
 } Err;
@@ -102,22 +101,20 @@ const char* err_msg(Err err) {
 		case err_out_of_memory:
 			return "out of memory";
 		case err_file_cannot_read:
-			return "file can't be read";
-		case err_parse_magic:
-			return "parse .pak magic failed";
-		case err_parse_version:
-			return "parse .pak version failed";
-		case err_parse_file_name:
-			return "parse .pak inner file name failed";
-		case err_parse_file_size:
-			return "parse .pak inner file size failed";
-		case err_parse_file_last_write_time:
-			return "parse .pak inner file last write time failed";
-		case err_parse_file_attributes:
-			return "parse .pak file attributes failed";
-		case err_check_magic:
+			return "can't read file";
+		case err_parse_header_magic:
+			return "can't parse .pak magic";
+		case err_parse_header_version:
+			return "can't parse .pak version";
+		case err_parse_header_attr_file_name:
+			return "can't parse .pak inner file name";
+		case err_parse_header_attr_file_size:
+			return "can't parse .pak inner file size";
+		case err_parse_header_attr_file_last_write_time:
+			return "can't parse .pak inner file last write time";
+		case err_check_header_magic:
 			return "invalid .pak magic";
-		case err_check_version:
+		case err_check_header_version:
 			return "invalid .pak version";
 		case err_os_windows_api:
 			return format_windows_error_code(GetLastError());
@@ -181,7 +178,6 @@ Err pak_header_create(PakHeader** ph) {
 		*ph = NULL;
 		return err_out_of_memory;
 	}
-	
 	
 	Err err = file_attr_list_create(&(temp->attrList));
 	if (err != err_success) {
@@ -336,19 +332,19 @@ Err parse_all_file_attrs(FILE* pakFile, PakHeader* header) {
 		err = parse_file_name(pakFile, attr);
 		if (err != err_success) {
 			free(attr); 
-			return err_parse_file_name;
+			return err_parse_header_attr_file_name;
 		}
 		
 		err = parse_file_size(pakFile, attr);
 		if (err != err_success) {
 			free(attr); 
-			return err_parse_file_size;
+			return err_parse_header_attr_file_size;
 		}
 		
 		err = parse_file_last_write_time(pakFile, attr);
 		if (err != err_success) {
 			free(attr);
-			return err_parse_file_last_write_time;
+			return err_parse_header_attr_file_last_write_time;
 		}
 
 		attr->next = NULL;
@@ -433,25 +429,25 @@ Err parse_pak_header(FILE* pakFile, PakHeader* header) {
 	
 	err = parse_magic(pakFile, header);
 	if (err != err_success) {
-		return err_parse_magic;
+		return err_parse_header_magic;
 	}
 
 	if (!check_magic(header)) {
-		return err_check_magic;
+		return err_check_header_magic;
 	}
 
 	err = parse_version(pakFile, header);
 	if (err != err_success) {
-		return err_parse_version;
+		return err_parse_header_version;
 	}
 	
 	if (!check_version(header)) {
-		return err_check_version;
+		return err_check_header_version;
 	}
 	
 	err = parse_all_file_attrs(pakFile, header);
 	if (err != err_success) {
-		return err_parse_file_attributes;
+		return err;
 	}
 	
 	return err_success;
@@ -492,8 +488,8 @@ Err extract_one_file(FILE* pakFile, const FileAttr* attr, const char* extractPat
 	Err err;
 	
 	build_complete_path(path, extractPath, attr->fileName);
-	err = recursive_create_parent_dirs(path);
 	
+	err = recursive_create_parent_dirs(path);
 	if (err != err_success) {
 		return err_create_parent_dirs;
 	}
@@ -560,7 +556,7 @@ void save_file_name_list(const PakHeader* header, const char* savPath) {
 
 int main(int argc, char* argv[]) {
 	if (argc != 3) {
-		fprintf(stderr, "usage: %s <yours.pak> <savDir>\n", argv[0]);
+		fprintf(stderr, "usage: %s yours.pak savDir\n", argv[0]);
 		return 1;
 	}
 
@@ -585,7 +581,7 @@ int main(int argc, char* argv[]) {
 	
 	err = parse_pak_header(pakFile, ph);
 	if (err != err_success) {
-		fprintf(stderr, "parse pak header failed: %s.\n", err_msg(err));
+		fprintf(stderr, "parse pak header failed, %s.\n", err_msg(err));
 		pak_header_destroy(ph);
 		fclose(pakFile);
 		return 1;
