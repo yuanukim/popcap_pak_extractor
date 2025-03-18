@@ -210,11 +210,14 @@ void pak_header_destroy(PakHeader* ph) {
 	} \
 } while(0)
 
-
-Err read_file(void *ptr, size_t size, size_t nmemb, FILE *stream, int32_t* readLen) {
+/*
+	if can't read the require nmemb x size bytes data, then return err_file_cannot_read,
+	else return err_success.
+*/
+Err read_binary_file(void *ptr, size_t size, size_t nmemb, FILE *stream, int32_t* readLen) {
 	size_t len = fread(ptr, size, nmemb, stream);
 	
-	if (len < nmemb && ferror(stream)) {
+	if (len != nmemb) {
 		return err_file_cannot_read;
 	}
 	else {
@@ -227,7 +230,7 @@ Err read_file(void *ptr, size_t size, size_t nmemb, FILE *stream, int32_t* readL
 }
 
 Err parse_magic(FILE* pakFile, PakHeader* header) {
-	Err err = read_file(header->magic, sizeof(UCHAR), BYTES_OF_MAGIC, pakFile, NULL);
+	Err err = read_binary_file(header->magic, sizeof(UCHAR), BYTES_OF_MAGIC, pakFile, NULL);
 	if (err != err_success) {
 		return err;
 	}
@@ -237,7 +240,7 @@ Err parse_magic(FILE* pakFile, PakHeader* header) {
 }
 
 Err parse_version(FILE* pakFile, PakHeader* header) {
-	Err err = read_file(header->version, sizeof(UCHAR), BYTES_OF_VERSION, pakFile, NULL);
+	Err err = read_binary_file(header->version, sizeof(UCHAR), BYTES_OF_VERSION, pakFile, NULL);
 	if (err != err_success) {
 		return err;
 	}
@@ -248,7 +251,7 @@ Err parse_version(FILE* pakFile, PakHeader* header) {
 
 Err reach_pak_header_end(FILE* pakFile, bool* reached) {
 	UCHAR flag;
-	Err err = read_file(&flag, sizeof(UCHAR), 1, pakFile, NULL);
+	Err err = read_binary_file(&flag, sizeof(UCHAR), 1, pakFile, NULL);
 	
 	if (err != err_success) {
 		return err;
@@ -264,7 +267,7 @@ Err parse_file_name(FILE* pakFile, FileAttr* attr) {
 	Err err;
 
 	/* get the length of the file name. */
-	err = read_file(&byte, sizeof(UCHAR), 1, pakFile, NULL);
+	err = read_binary_file(&byte, sizeof(UCHAR), 1, pakFile, NULL);
 	if (err != err_success) {
 		return err;
 	}
@@ -277,7 +280,7 @@ Err parse_file_name(FILE* pakFile, FileAttr* attr) {
 		return err_out_of_memory;
 	}
 
-	err = read_file(attr->fileName, sizeof(char), filenameLen, pakFile, NULL);
+	err = read_binary_file(attr->fileName, sizeof(char), filenameLen, pakFile, NULL);
 	if (err != err_success) {
 		free(attr->fileName);
 		return err;
@@ -291,7 +294,7 @@ Err parse_file_name(FILE* pakFile, FileAttr* attr) {
 Err parse_file_size(FILE* pakFile, FileAttr* attr) {
 	UCHAR* buf = (UCHAR*)(&(attr->fileSize));
 	
-	Err err = read_file(buf, sizeof(UCHAR), BYTES_OF_FILE_SIZE, pakFile, NULL);
+	Err err = read_binary_file(buf, sizeof(UCHAR), BYTES_OF_FILE_SIZE, pakFile, NULL);
 	if (err != err_success) {
 		return err;
 	}
@@ -303,7 +306,7 @@ Err parse_file_size(FILE* pakFile, FileAttr* attr) {
 Err parse_file_last_write_time(FILE* pakFile, FileAttr* attr) {
 	UCHAR* buf = (UCHAR*)(&(attr->lastWriteTime));
 
-	Err err = read_file(buf, sizeof(UCHAR), BYTES_OF_FILE_TIME, pakFile, NULL);
+	Err err = read_binary_file(buf, sizeof(UCHAR), BYTES_OF_FILE_TIME, pakFile, NULL);
 	if (err != err_success) {
 		return err;
 	}
@@ -316,7 +319,7 @@ Err parse_all_file_attrs(FILE* pakFile, PakHeader* header) {
 	Err err;
 	bool reachEnd;
 	
-	while (!feof(pakFile)) {
+	while (true) {
 		err = reach_pak_header_end(pakFile, &reachEnd);
 		if (err != err_success) {
 			return err;
@@ -463,7 +466,7 @@ Err save_one_file_data(FILE* pakFile, const FileAttr* attr, HANDLE hFile, char* 
 	while (fileSize > 0 && !feof(pakFile)) {
 		needLen = (fileSize < bufLen ? fileSize : bufLen);
 		
-		err = read_file(buf, sizeof(char), needLen, pakFile, &readLen);
+		err = read_binary_file(buf, sizeof(char), needLen, pakFile, &readLen);
 		if (err != err_success) {
 			return err;
 		}
