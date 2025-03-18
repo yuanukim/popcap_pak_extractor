@@ -560,7 +560,7 @@ void save_file_name_list(const PakHeader* header, const char* savPath) {
 
 int main(int argc, char* argv[]) {
 	if (argc != 3) {
-		fprintf(stderr, "usage: %s yours.pak\n", argv[0]);
+		fprintf(stderr, "usage: %s <yours.pak> <savDir>\n", argv[0]);
 		return 1;
 	}
 
