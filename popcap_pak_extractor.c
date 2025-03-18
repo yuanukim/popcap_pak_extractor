@@ -44,9 +44,9 @@ typedef enum Err {
 	err_file_cannot_read,
 	err_parse_header_magic,
 	err_parse_header_version,
-	err_parse_header_attr_file_name,
-	err_parse_header_attr_file_size,
-	err_parse_header_attr_file_last_write_time,
+	err_parse_header_inner_file_name,
+	err_parse_header_inner_file_size,
+	err_parse_header_inner_file_last_write_time,
 	err_check_header_magic,
 	err_check_header_version,
 	err_create_parent_dirs,
@@ -106,11 +106,11 @@ const char* err_msg(Err err) {
 			return "can't parse .pak magic";
 		case err_parse_header_version:
 			return "can't parse .pak version";
-		case err_parse_header_attr_file_name:
+		case err_parse_header_inner_file_name:
 			return "can't parse .pak inner file name";
-		case err_parse_header_attr_file_size:
+		case err_parse_header_inner_file_size:
 			return "can't parse .pak inner file size";
-		case err_parse_header_attr_file_last_write_time:
+		case err_parse_header_inner_file_last_write_time:
 			return "can't parse .pak inner file last write time";
 		case err_check_header_magic:
 			return "invalid .pak magic";
@@ -332,19 +332,19 @@ Err parse_all_file_attrs(FILE* pakFile, PakHeader* header) {
 		err = parse_file_name(pakFile, attr);
 		if (err != err_success) {
 			free(attr); 
-			return err_parse_header_attr_file_name;
+			return err_parse_header_inner_file_name;
 		}
 		
 		err = parse_file_size(pakFile, attr);
 		if (err != err_success) {
 			free(attr); 
-			return err_parse_header_attr_file_size;
+			return err_parse_header_inner_file_size;
 		}
 		
 		err = parse_file_last_write_time(pakFile, attr);
 		if (err != err_success) {
 			free(attr);
-			return err_parse_header_attr_file_last_write_time;
+			return err_parse_header_inner_file_last_write_time;
 		}
 
 		attr->next = NULL;
