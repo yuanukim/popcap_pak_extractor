@@ -35,23 +35,21 @@
 #define BYTES_OF_FILE_SIZE   4
 #define BYTES_OF_FILE_TIME   sizeof(FILETIME)
 
-#define WINDOWS_ERROR_MSG_BUF_SIZE   1024
+#define ERR_SUCCESS                                   0
+#define ERR_FAILED                                    1
+#define ERR_OUT_OF_MEMORY                             2
+#define ERR_FILE_CANNOT_READ                          3
+#define ERR_PARSE_HEADER_MAGIC                        4
+#define ERR_PARSE_HEADER_VERSION                      5
+#define ERR_PARSE_HEADER_INNER_FILE_NAME              6
+#define ERR_PARSE_HEADER_INNER_FILE_SIZE              7
+#define ERR_PARSE_HEADER_INNER_FILE_LAST_WRITE_TIME   8
+#define ERR_CHECK_HEADER_MAGIC                        9
+#define ERR_CHECK_HEADER_VERSION                      10
+#define ERR_CREATE_PARENT_DIRS                        11
+#define ERR_OS_WINDOWS_API                            12
 
-typedef enum Err {
-	err_success,
-	err_failed,
-	err_out_of_memory,
-	err_file_cannot_read,
-	err_parse_header_magic,
-	err_parse_header_version,
-	err_parse_header_inner_file_name,
-	err_parse_header_inner_file_size,
-	err_parse_header_inner_file_last_write_time,
-	err_check_header_magic,
-	err_check_header_version,
-	err_create_parent_dirs,
-	err_os_windows_api
-} Err;
+typedef int Err;
 
 typedef struct FileAttr {
 	char* fileName;
@@ -96,31 +94,31 @@ const char* format_windows_error_code(DWORD errCode) {
 
 const char* err_msg(Err err) {
 	switch(err) {
-		case err_success:
+		case ERR_SUCCESS:
 			return "success";
-		case err_out_of_memory:
+		case ERR_OUT_OF_MEMORY:
 			return "out of memory";
-		case err_file_cannot_read:
+		case ERR_FILE_CANNOT_READ:
 			return "can't read file";
-		case err_parse_header_magic:
+		case ERR_PARSE_HEADER_MAGIC:
 			return "can't parse .pak magic";
-		case err_parse_header_version:
+		case ERR_PARSE_HEADER_VERSION:
 			return "can't parse .pak version";
-		case err_parse_header_inner_file_name:
+		case ERR_PARSE_HEADER_INNER_FILE_NAME:
 			return "can't parse .pak inner file name";
-		case err_parse_header_inner_file_size:
+		case ERR_PARSE_HEADER_INNER_FILE_SIZE:
 			return "can't parse .pak inner file size";
-		case err_parse_header_inner_file_last_write_time:
+		case ERR_PARSE_HEADER_INNER_FILE_LAST_WRITE_TIME:
 			return "can't parse .pak inner file last write time";
-		case err_check_header_magic:
+		case ERR_CHECK_HEADER_MAGIC:
 			return "invalid .pak magic";
-		case err_check_header_version:
+		case ERR_CHECK_HEADER_VERSION:
 			return "invalid .pak version";
-		case err_os_windows_api:
+		case ERR_OS_WINDOWS_API:
 			return format_windows_error_code(GetLastError());
-		case err_create_parent_dirs:
+		case ERR_CREATE_PARENT_DIRS:
 			return "can't create parent directories with the given path";
-		case err_failed:
+		case ERR_FAILED:
 		default:
 			return "failed";
 	}
@@ -130,21 +128,21 @@ Err file_attr_list_create(FileAttrList** list) {
 	FileAttrList* temp = (FileAttrList*)malloc(sizeof(FileAttrList));
 	if (temp == NULL) {
 		*list = NULL;
-		return err_out_of_memory;
+		return ERR_OUT_OF_MEMORY;
 	}
 
 	temp->head = (FileAttr*)malloc(sizeof(FileAttr));
 	if (temp->head == NULL) {
 		free(temp);
 		*list = NULL;
-		return err_out_of_memory;
+		return ERR_OUT_OF_MEMORY;
 	}
 	
 	temp->head->next = NULL;
 	temp->tail = temp->head;
 	temp->length = 0;
 	*list = temp;
-	return err_success;
+	return ERR_SUCCESS;
 }
 
 void file_attr_list_destroy(FileAttrList* list) {
@@ -176,18 +174,18 @@ Err pak_header_create(PakHeader** ph) {
 	PakHeader* temp = (PakHeader*)malloc(sizeof(PakHeader));
 	if (temp == NULL) {
 		*ph = NULL;
-		return err_out_of_memory;
+		return ERR_OUT_OF_MEMORY;
 	}
 	
 	Err err = file_attr_list_create(&(temp->attrList));
-	if (err != err_success) {
+	if (err != ERR_SUCCESS) {
 		free(temp);
 		*ph = NULL;
 		return err;
 	}
 	
 	*ph = temp;
-	return err_success;
+	return ERR_SUCCESS;
 }
 
 void pak_header_destroy(PakHeader* ph) {
@@ -207,54 +205,54 @@ void pak_header_destroy(PakHeader* ph) {
 } while(0)
 
 /*
-	if can't read the require nmemb x size bytes data, then return err_file_cannot_read,
-	else return err_success.
+	if can't read the require nmemb x size bytes data, then return ERR_FILE_CANNOT_READ,
+	else return ERR_SUCCESS.
 */
 Err read_binary_file(void *ptr, size_t size, size_t nmemb, FILE *stream, int32_t* readLen) {
 	size_t len = fread(ptr, size, nmemb, stream);
 	
 	if (len != nmemb) {
-		return err_file_cannot_read;
+		return ERR_FILE_CANNOT_READ;
 	}
 	else {
 		if (readLen != NULL) {
 			*readLen = len;	
 		}
 		
-		return err_success;
+		return ERR_SUCCESS;
 	}
 }
 
 Err parse_magic(FILE* pakFile, PakHeader* header) {
 	Err err = read_binary_file(header->magic, sizeof(UCHAR), BYTES_OF_MAGIC, pakFile, NULL);
-	if (err != err_success) {
+	if (err != ERR_SUCCESS) {
 		return err;
 	}
 	
 	decode_bytes(header->magic, header->magic, BYTES_OF_MAGIC);
-	return err_success;
+	return ERR_SUCCESS;
 }
 
 Err parse_version(FILE* pakFile, PakHeader* header) {
 	Err err = read_binary_file(header->version, sizeof(UCHAR), BYTES_OF_VERSION, pakFile, NULL);
-	if (err != err_success) {
+	if (err != ERR_SUCCESS) {
 		return err;
 	}
 	
 	decode_bytes(header->version, header->version, BYTES_OF_VERSION);
-	return err_success;
+	return ERR_SUCCESS;
 }
 
 Err reach_pak_header_end(FILE* pakFile, bool* reached) {
 	UCHAR flag;
 	Err err = read_binary_file(&flag, sizeof(UCHAR), 1, pakFile, NULL);
 	
-	if (err != err_success) {
+	if (err != ERR_SUCCESS) {
 		return err;
 	}
 	else {
 		*reached = (decode_one_byte(flag) == 0x80);
-		return err_success;
+		return ERR_SUCCESS;
 	}
 }
 
@@ -264,7 +262,7 @@ Err parse_file_name(FILE* pakFile, FileAttr* attr) {
 
 	/* get the length of the file name. */
 	err = read_binary_file(&byte, sizeof(UCHAR), 1, pakFile, NULL);
-	if (err != err_success) {
+	if (err != ERR_SUCCESS) {
 		return err;
 	}
 	
@@ -273,42 +271,42 @@ Err parse_file_name(FILE* pakFile, FileAttr* attr) {
 	/* get the file name. */
 	attr->fileName = (char*)malloc((filenameLen + 1) * sizeof(char));
 	if (attr->fileName == NULL) {
-		return err_out_of_memory;
+		return ERR_OUT_OF_MEMORY;
 	}
 
 	err = read_binary_file(attr->fileName, sizeof(char), filenameLen, pakFile, NULL);
-	if (err != err_success) {
+	if (err != ERR_SUCCESS) {
 		free(attr->fileName);
 		return err;
 	}
 	
 	attr->fileName[filenameLen] = '\0';
 	decode_bytes(attr->fileName, attr->fileName, filenameLen);
-	return err_success;
+	return ERR_SUCCESS;
 }
 
 Err parse_file_size(FILE* pakFile, FileAttr* attr) {
 	UCHAR* buf = (UCHAR*)(&(attr->fileSize));
 	
 	Err err = read_binary_file(buf, sizeof(UCHAR), BYTES_OF_FILE_SIZE, pakFile, NULL);
-	if (err != err_success) {
+	if (err != ERR_SUCCESS) {
 		return err;
 	}
 	
 	decode_bytes(buf, buf, BYTES_OF_FILE_SIZE);
-	return err_success;
+	return ERR_SUCCESS;
 }
 
 Err parse_file_last_write_time(FILE* pakFile, FileAttr* attr) {
 	UCHAR* buf = (UCHAR*)(&(attr->lastWriteTime));
 
 	Err err = read_binary_file(buf, sizeof(UCHAR), BYTES_OF_FILE_TIME, pakFile, NULL);
-	if (err != err_success) {
+	if (err != ERR_SUCCESS) {
 		return err;
 	}
 	
 	decode_bytes(buf, buf, (int32_t)BYTES_OF_FILE_TIME);
-	return err_success;
+	return ERR_SUCCESS;
 }
 
 Err parse_all_file_attrs(FILE* pakFile, PakHeader* header) {
@@ -317,7 +315,7 @@ Err parse_all_file_attrs(FILE* pakFile, PakHeader* header) {
 	
 	while (true) {
 		err = reach_pak_header_end(pakFile, &reachEnd);
-		if (err != err_success) {
+		if (err != ERR_SUCCESS) {
 			return err;
 		}
 		else if (reachEnd) {
@@ -326,32 +324,32 @@ Err parse_all_file_attrs(FILE* pakFile, PakHeader* header) {
 
 		FileAttr* attr = (FileAttr*)malloc(sizeof(FileAttr));
 		if (attr == NULL) {
-			return err_out_of_memory;
+			return ERR_OUT_OF_MEMORY;
 		}
 
 		err = parse_file_name(pakFile, attr);
-		if (err != err_success) {
+		if (err != ERR_SUCCESS) {
 			free(attr); 
-			return err_parse_header_inner_file_name;
+			return ERR_PARSE_HEADER_INNER_FILE_NAME;
 		}
 		
 		err = parse_file_size(pakFile, attr);
-		if (err != err_success) {
+		if (err != ERR_SUCCESS) {
 			free(attr); 
-			return err_parse_header_inner_file_size;
+			return ERR_PARSE_HEADER_INNER_FILE_SIZE;
 		}
 		
 		err = parse_file_last_write_time(pakFile, attr);
-		if (err != err_success) {
+		if (err != ERR_SUCCESS) {
 			free(attr);
-			return err_parse_header_inner_file_last_write_time;
+			return ERR_PARSE_HEADER_INNER_FILE_LAST_WRITE_TIME;
 		}
 
 		attr->next = NULL;
 		file_attr_list_add_back(header->attrList, attr);
 	}
 	
-	return err_success;
+	return ERR_SUCCESS;
 }
 
 bool check_magic(const PakHeader* header) {
@@ -410,7 +408,7 @@ Err recursive_create_parent_dirs(char* path) {
 
 			if (!is_dir_exist(path)) {
 				if (!CreateDirectory(path, NULL)) {
-					return err_os_windows_api;
+					return ERR_OS_WINDOWS_API;
 				}
 			}
 
@@ -421,36 +419,36 @@ Err recursive_create_parent_dirs(char* path) {
 		++cursor;
 	}
 
-	return err_success;
+	return ERR_SUCCESS;
 }
 
 Err parse_pak_header(FILE* pakFile, PakHeader* header) {
 	Err err;
 	
 	err = parse_magic(pakFile, header);
-	if (err != err_success) {
-		return err_parse_header_magic;
+	if (err != ERR_SUCCESS) {
+		return ERR_PARSE_HEADER_MAGIC;
 	}
 
 	if (!check_magic(header)) {
-		return err_check_header_magic;
+		return ERR_CHECK_HEADER_MAGIC;
 	}
 
 	err = parse_version(pakFile, header);
-	if (err != err_success) {
-		return err_parse_header_version;
+	if (err != ERR_SUCCESS) {
+		return ERR_PARSE_HEADER_VERSION;
 	}
 	
 	if (!check_version(header)) {
-		return err_check_header_version;
+		return ERR_CHECK_HEADER_VERSION;
 	}
 	
 	err = parse_all_file_attrs(pakFile, header);
-	if (err != err_success) {
+	if (err != ERR_SUCCESS) {
 		return err;
 	}
 	
-	return err_success;
+	return ERR_SUCCESS;
 }
 
 Err save_one_file_data(FILE* pakFile, const FileAttr* attr, HANDLE hFile, char* buf, int32_t bufLen) {
@@ -463,24 +461,24 @@ Err save_one_file_data(FILE* pakFile, const FileAttr* attr, HANDLE hFile, char* 
 		needLen = (fileSize < bufLen ? fileSize : bufLen);
 		
 		err = read_binary_file(buf, sizeof(char), needLen, pakFile, &readLen);
-		if (err != err_success) {
+		if (err != ERR_SUCCESS) {
 			return err;
 		}
 
 		decode_bytes(buf, buf, readLen);
 		
 		if (!WriteFile(hFile, buf, readLen, NULL, NULL)) {
-			return err_os_windows_api;
+			return ERR_OS_WINDOWS_API;
 		}
 
 		fileSize -= readLen;
 	}
 
 	if (!SetFileTime(hFile, NULL, NULL, &(attr->lastWriteTime))) {
-		return err_os_windows_api;
+		return ERR_OS_WINDOWS_API;
 	}
 	
-	return err_success;
+	return ERR_SUCCESS;
 }
 
 Err extract_one_file(FILE* pakFile, const FileAttr* attr, const char* extractPath, char* buf, size_t len) {
@@ -490,22 +488,22 @@ Err extract_one_file(FILE* pakFile, const FileAttr* attr, const char* extractPat
 	build_complete_path(path, extractPath, attr->fileName);
 	
 	err = recursive_create_parent_dirs(path);
-	if (err != err_success) {
-		return err_create_parent_dirs;
+	if (err != ERR_SUCCESS) {
+		return ERR_CREATE_PARENT_DIRS;
 	}
 
 	HANDLE hFile = CreateFile(path, GENERIC_WRITE, 0, NULL, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
 	if (hFile == INVALID_HANDLE_VALUE) {
-		return err_os_windows_api;
+		return ERR_OS_WINDOWS_API;
 	}
 
 	err = save_one_file_data(pakFile, attr, hFile, buf, len);
-	if (err != err_success) {
+	if (err != ERR_SUCCESS) {
 		return err;
 	}
 	
 	CloseHandle(hFile);
-	return err_success;
+	return ERR_SUCCESS;
 }
 
 void extract_files(FILE* pakFile, const PakHeader* header, const char* extractPath) {
@@ -523,7 +521,7 @@ void extract_files(FILE* pakFile, const PakHeader* header, const char* extractPa
 	while (cursor != NULL) {
 		err = extract_one_file(pakFile, cursor, extractPath, buf, buf_size);
 		
-		if (err != err_success) {
+		if (err != ERR_SUCCESS) {
 			free(buf);
 			fprintf(stderr, "extract files failed when meet inner file: %s, error msg: %s\n", cursor->fileName, err_msg(err));
 			return;
@@ -573,14 +571,14 @@ int main(int argc, char* argv[]) {
 	
 	PakHeader* ph;
 	Err err = pak_header_create(&ph);
-	if (err != err_success) {
+	if (err != ERR_SUCCESS) {
 		fprintf(stderr, "parse failed, can not create a .pak header handle, err msg: %s.\n", err_msg(err));
 		fclose(pakFile);
 		return 1;
 	}
 	
 	err = parse_pak_header(pakFile, ph);
-	if (err != err_success) {
+	if (err != ERR_SUCCESS) {
 		fprintf(stderr, "parse pak header failed, %s.\n", err_msg(err));
 		pak_header_destroy(ph);
 		fclose(pakFile);
