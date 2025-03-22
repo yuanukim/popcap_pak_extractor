@@ -172,7 +172,11 @@ void save_file_attr_list(const Header& header, const char* savPath) {
     Before writing this function, I have tried the answer from:
     https://stackoverflow.com/questions/72030923/how-to-convert-a-windows-filetime-to-a-stdchronotime-pointstdchronofile
 
-    but it does not work, so I consider to create the system_clock first, then convert it to file_clock.
+    be cautions that, this solution only works for vc++, but it would get a really different result on other compilers, 
+    such as my winlibs-x86_64-posix-seh-gcc-14.1.0-mingw-w64msvcrt-11.0.1-r1 g++ compiler and my Msys2 mingw compiler.
+    so I consider to create the system_clock first, then convert it to file_clock. 
+
+    if using visual C++, the conversion could be easily replaced by using file_clock::duration and file_clock::time_point.
 */
 file_clock::time_point convert_win_FILETIME_to_file_clock(const FILETIME& ft) {
     ULARGE_INTEGER uli;
@@ -181,13 +185,13 @@ file_clock::time_point convert_win_FILETIME_to_file_clock(const FILETIME& ft) {
     uli.LowPart = ft.dwLowDateTime;
 
     /* 
-		windows file time begins from 1601/01/01, but unix timestamp 
-		begins from 1970/01/01, so we have to minus this duration, 
-		that's where 11644473600LL seconds  come from.
-		
-		uli.QuadPart accurates to 10 ^ -7 seconds, so let it minus 116444736000000000LL first,
+        windows file time begins from 1601/01/01, but unix timestamp 
+        begins from 1970/01/01, so we have to minus this duration, 
+        that's where 11644473600LL seconds  come from.
+        
+        uli.QuadPart accurates to 10 ^ -7 seconds, so let it minus 116444736000000000LL first,
         then convert it to a system_clock would work.
-	*/
+    */
     uint64_t nanosec = (static_cast<uint64_t>(uli.QuadPart) - 116444736000000000LL) * 100;
     
     system_clock::duration dur{ nanosec };
