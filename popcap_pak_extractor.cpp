@@ -1,5 +1,5 @@
 /**
- * @author yuanshixi
+ * @author yuanukim
  * @brief PopCap's .pak file extractor, written in C++14, only works for windows platform.
  * 
  * a very big thanks to https://github.com/nathaniel-daniel/popcap-pak-rs for giving 
@@ -27,6 +27,7 @@
 #include <Windows.h>
 
 #include <iostream>
+#include <iomanip>
 #include <fstream>
 #include <string>
 #include <memory>
@@ -198,11 +199,34 @@ public:
     }
 };
 
+decltype(auto) write_win_filetime(const FILETIME& ft) {
+    ULARGE_INTEGER uli;
+
+    uli.HighPart = ft.dwHighDateTime;
+    uli.LowPart = ft.dwLowDateTime;
+
+    /* 
+        windows file time begins from 1601/01/01, but unix timestamp 
+        begins from 1970/01/01, so we have to minus this duration, 
+        that's where 11644473600LL seconds come from.
+        
+        uli.QuadPart accurates to 10 ^ -7 seconds, so let it minus 116444736000000000LL first,
+        then convert it to a system_clock would work.
+    */
+    system_clock::duration dur{ 100 * ((uint64_t)uli.QuadPart - 116444736000000000LL) };
+    system_clock::time_point tp{ dur };
+
+    time_t seconds = system_clock::to_time_t(tp);
+    tm* localTime = std::localtime(&seconds);
+
+    return std::put_time(localTime, "%Y-%m-%d %H:%M:%S");
+}
+
 void save_file_attr_list(const Header& header, const char* savPath) {
     std::ofstream out{ savPath };
 
     for (const FileAttr& attr : header.fileAttrList) {
-        out << attr.fileName.get() << ", " << attr.fileSize << " bytes\n";
+        out << write_win_filetime(attr.lastWriteTime) << ", " << std::setw(10) << attr.fileSize << " bytes, " << attr.fileName.get() << "\n";
     }
 }
 
@@ -340,21 +364,13 @@ void pak_extractor_entrance(int argc, char* argv[]) {
         return;
     }
 
-    auto beginTime = system_clock::now();
     parser.parse(header, f);
-    auto parseFinish = system_clock::now();
-
     save_file_attr_list(header, fileAttrListSavPath);
     std::cout << "file attributes are saved at `" << fileAttrListSavPath << "`\n";
     std::cout << header.fileAttrList.size() << " files are found in `" << argv[1] << "`\n";
 
     save_file_data(header, f, argv[2]);
     std::cout << "files data are saved at directory `./" << argv[2] << "`\n";
-    auto saveFinish = system_clock::now();
-
-    std::cout << "\n";
-    std::cout << "parse time cost: " << duration_cast<milliseconds>(parseFinish - beginTime).count() << "ms\n";
-    std::cout << "save time cost: " << duration_cast<milliseconds>(saveFinish - parseFinish).count() << "ms\n";
 }
 
 int main(int argc, char* argv[]) {
