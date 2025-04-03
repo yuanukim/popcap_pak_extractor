@@ -555,6 +555,8 @@ bool extract_inner_files(PakHeader* ph, WinFile* wf, const char* extractDir) {
 }
 
 const char* format_windows_filetime_struct(const FILETIME* ft) {
+    PPE_ASSERT(ft != NULL);
+    
     static char buf[64];
     
     ULARGE_INTEGER ull;
@@ -575,6 +577,8 @@ const char* format_windows_filetime_struct(const FILETIME* ft) {
 }
 
 void save_file_attr_list(PakHeader* ph) {
+    PPE_ASSERT(ph != NULL);
+    
     const char* savPath = "popcap_pak_extractor_file_attr_list.txt";
     FILE* savFile = fopen(savPath, "w");
     if (savFile == NULL) {
