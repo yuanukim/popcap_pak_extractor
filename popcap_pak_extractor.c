@@ -218,6 +218,8 @@ void read_pak_file(WinFile* wf, char* buf, DWORD numOfBytesToRead, LPDWORD numOf
         exit(EXIT_FAILURE);
     }
     
+    wf->size -= _numOfBytesRead;
+    
     if (numOfBytesRead != NULL) {
         *numOfBytesRead = _numOfBytesRead;
     }
