@@ -68,15 +68,15 @@ typedef struct WinFile {
     compile with -D ENABLE_PPE_ASSERT to let it work at the development/test stage. 
 */
 #ifdef ENABLE_PPE_ASSERT
-#define PPE_ASSERT(condition) do { \
-    if (!(condition)) { \
-        fprintf(stderr, "[%s|%s|%d] assert failed: %s\n", __FILE__, __func__, __LINE__, #condition); \
-        abort(); \
-    } \
-} while(0)
+    #define PPE_ASSERT(condition) do { \
+        if (!(condition)) { \
+            fprintf(stderr, "[%s|%s|%d] assert failed: %s\n", __FILE__, __func__, __LINE__, #condition); \
+            abort(); \
+        } \
+    } while(0)
 #else 
-#define PPE_ASSERT(condition) \
-    ((void)0)
+    #define PPE_ASSERT(condition) \
+        ((void)0)
 #endif
 
 /*
@@ -175,13 +175,16 @@ WinFile* open_pak_file(const char* path) {
     
     HANDLE hFile = CreateFile(path, GENERIC_READ, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
     if (hFile == INVALID_HANDLE_VALUE) {
-        return NULL;
+        DWORD err = GetLastError();
+        fprintf(stderr, "can't open %s, CreateFile() failed: %ld, %s\n", path, err, format_windows_error_code(err));
+        exit(EXIT_FAILURE);
     }
     
     DWORD size = GetFileSize(hFile, NULL);
     if (size == INVALID_FILE_SIZE) {
-        CloseHandle(hFile);
-        return NULL;
+        DWORD err = GetLastError();
+        fprintf(stderr, "can't open %s, GetFileSize() failed: %ld, %s\n", path, err, format_windows_error_code(err));
+        exit(EXIT_FAILURE);
     }
     
     WinFile* wf = (WinFile*)MALLOC_OR_ABORT(sizeof(WinFile));
@@ -198,28 +201,26 @@ void close_pak_file(WinFile* wf) {
     }
 }
 
-bool read_pak_file(WinFile* wf, char* buf, DWORD numOfBytesToRead, LPDWORD numOfBytesRead) {
+void read_pak_file(WinFile* wf, char* buf, DWORD numOfBytesToRead, LPDWORD numOfBytesRead) {
     PPE_ASSERT(wf != NULL);
     PPE_ASSERT(buf != NULL);
     PPE_ASSERT(numOfBytesRead != NULL);
     
     if (wf->size < numOfBytesToRead) {
-        fprintf(stderr, "given .pak file's size does not match the parsed file attributes, this file maybe broken.\n");
-        return false;
+        fprintf(stderr, "read from .pak failed, this file maybe broken.\n");
+        exit(EXIT_FAILURE);
     }
 
-    if (!ReadFile(wf->hFile, (LPVOID)buf, numOfBytesToRead, numOfBytesRead, NULL)) {
+    DWORD _numOfBytesRead;
+    if (!ReadFile(wf->hFile, (LPVOID)buf, numOfBytesToRead, &_numOfBytesRead, NULL)) {
         DWORD err = GetLastError();
-        fprintf(stderr, "read .pak file meets error, code: %d, msg: %s.\n", err, format_windows_error_code(err));
-        return false;
+        fprintf(stderr, "read from .pak failed, ReadFile() failed: %ld, %s\n", err, format_windows_error_code(err));
+        exit(EXIT_FAILURE);
     }
     
-    return true;
-}
-
-bool read_pak_file_ignore_bytes_read(WinFile* wf, char* buf, DWORD numOfBytesToRead) {
-    DWORD ignore;
-    return read_pak_file(wf, buf, numOfBytesToRead, &ignore);
+    if (numOfBytesRead != NULL) {
+        *numOfBytesRead = _numOfBytesRead;
+    }
 }
 
 #define decode_one_byte(ch) \
@@ -254,157 +255,156 @@ bool check_version(const PakHeader* ph) {
         && (ph->version[3] == 0x00);
 }
 
-bool parse_end_flag(PakHeader* ph, WinFile* wf, UCHAR* flag) {
-    PPE_ASSERT(ph != NULL);
+UCHAR parse_end_flag(WinFile* wf) {
     PPE_ASSERT(wf != NULL);
-    PPE_ASSERT(flag != NULL);
     
-    if (!read_pak_file_ignore_bytes_read(wf, flag, sizeof(UCHAR))) {
-        return false;
-    }
-    
-    *flag = decode_one_byte(*flag);
-    return true;
+    UCHAR flag;
+    read_pak_file(wf, (char*)&flag, sizeof(UCHAR), NULL);
+    return decode_one_byte(flag);
 }
 
-bool parse_magic(PakHeader* ph, WinFile* wf) {
+void parse_magic(PakHeader* ph, WinFile* wf) {
     PPE_ASSERT(ph != NULL);
     PPE_ASSERT(wf != NULL);
     
-    if (!read_pak_file_ignore_bytes_read(wf, ph->magic, sizeof(ph->magic))) {
-        return false;
-    }
-    
+    read_pak_file(wf, (char*)ph->magic, sizeof(ph->magic), NULL);
     decode_bytes(ph->magic, ph->magic, BYTES_OF_MAGIC);
-    return check_magic(ph);
+    
+    if (!check_magic(ph)) {
+        fprintf(stderr, "parse magic failed, this file is not a valid .pak\n");
+        exit(EXIT_FAILURE);
+    }
 }
 
-bool parse_version(PakHeader* ph, WinFile* wf) {
+void parse_version(PakHeader* ph, WinFile* wf) {
     PPE_ASSERT(ph != NULL);
     PPE_ASSERT(wf != NULL);
     
-    if (!read_pak_file_ignore_bytes_read(wf, ph->version, sizeof(ph->version))) {
-        return false;
-    }
-    
+    read_pak_file(wf, (char*)ph->version, sizeof(ph->version), NULL);
     decode_bytes(ph->version, ph->version, BYTES_OF_VERSION);
-    return check_version(ph);
+    
+    if (!check_version(ph)) {
+        fprintf(stderr, "parse version failed, this file is not a valid .pak\n");
+        exit(EXIT_FAILURE);
+    }
 }
 
-bool parse_file_name(PakHeader* ph, WinFile* wf, FileAttr* attr) {
+void parse_file_name(PakHeader* ph, WinFile* wf, FileAttr* attr) {
     PPE_ASSERT(ph != NULL);
     PPE_ASSERT(wf != NULL);
     PPE_ASSERT(attr != NULL);
     
     UCHAR byte;
-    if (!read_pak_file_ignore_bytes_read(wf, &byte, sizeof(byte))) {
-        return false;
-    }
+    read_pak_file(wf, (char*)&byte, sizeof(byte), NULL);
     
     int32_t filenameLen = (int32_t)decode_one_byte(byte);
     attr->fileName = (char*)MALLOC_OR_ABORT((filenameLen + 1) * sizeof(char));
     
-    if (!read_pak_file_ignore_bytes_read(wf, attr->fileName, filenameLen * sizeof(char))) {
-        free(attr->fileName);
-        return false;
-    }
-    
+    read_pak_file(wf, attr->fileName, filenameLen * sizeof(char), NULL);
     decode_bytes(attr->fileName, attr->fileName, filenameLen);
     attr->fileName[filenameLen] = '\0';
-    return true;
 }
 
-bool parse_file_size(PakHeader* ph, WinFile* wf, FileAttr* attr) {
-    PPE_ASSERT(ph != NULL);
+void parse_file_size(WinFile* wf, FileAttr* attr) {
     PPE_ASSERT(wf != NULL);
     PPE_ASSERT(attr != NULL);
     
     UCHAR* buf = (UCHAR*)(&(attr->fileSize));
     
-    if (!read_pak_file_ignore_bytes_read(wf, buf, sizeof(attr->fileSize))) {
-        return false;
-    }
-    
+    read_pak_file(wf, (char*)buf, sizeof(attr->fileSize), NULL);
     decode_bytes(buf, buf, BYTES_OF_FILE_SIZE);
-    return true;
 }
 
-bool parse_file_last_write_time(PakHeader* ph, WinFile* wf, FileAttr* attr) {
+void parse_file_last_write_time(PakHeader* ph, WinFile* wf, FileAttr* attr) {
     PPE_ASSERT(ph != NULL);
     PPE_ASSERT(wf != NULL);
     PPE_ASSERT(attr != NULL);
     
     UCHAR* buf = (UCHAR*)(&(attr->lastWriteTime));
 
-    if (!read_pak_file_ignore_bytes_read(wf, buf, sizeof(attr->lastWriteTime))) {
-        return false;
-    }
-    
-    decode_bytes(buf, buf, BYTES_OF_FILE_TIME);
-    return true;
+    read_pak_file(wf, (char*)buf, sizeof(attr->lastWriteTime), NULL);
+    decode_bytes(buf, buf, (int32_t)BYTES_OF_FILE_TIME);
 }
 
-bool parse_all_file_attrs(PakHeader* ph, WinFile* wf) {
+void parse_all_file_attrs(PakHeader* ph, WinFile* wf) {
     PPE_ASSERT(ph != NULL);
     PPE_ASSERT(wf != NULL);
     
-    UCHAR endFlag;
-    
     while (true) {
-        if (!parse_end_flag(ph, wf, &endFlag)) {
-            return false;
-        }
-        
+        UCHAR endFlag = parse_end_flag(wf);
         if (check_end_flag(endFlag)) {
             break;
         }
         
         FileAttr* attr = (FileAttr*)MALLOC_OR_ABORT(sizeof(FileAttr));
         
-        if (!parse_file_name(ph, wf, attr)) {
-            free(attr);
-            return false;
-        }
-        
-        if (!parse_file_size(ph, wf, attr)) {
-            free(attr->fileName);
-            free(attr);
-            return false;
-        }
-        
-        if (!parse_file_last_write_time(ph, wf, attr)) {
-            free(attr->fileName);
-            free(attr);
-            return false;
-        }
-        
+        parse_file_name(ph, wf, attr);
+        parse_file_size(wf, attr);
+        parse_file_last_write_time(ph, wf, attr);
         pak_header_add_attr(ph, attr);
     }
-    
-    return true;
 }
 
-bool parse_header(PakHeader* ph, WinFile* wf) {
+void parse_header(PakHeader* ph, WinFile* wf) {
     PPE_ASSERT(ph != NULL);
     PPE_ASSERT(wf != NULL);
     
-    if (!parse_magic(ph, wf)) {
-        fprintf(stderr, "parse magic failed.\n");
-        return false;
-    }
+    printf("parse magic.\n");
+    parse_magic(ph, wf);    
     
-    if (!parse_version(ph, wf)) {
-        fprintf(stderr, "parse version failed.\n");
-        return false;
-    }
+    printf("parse version.\n");
+    parse_version(ph, wf);
     
-    if (!parse_all_file_attrs(ph, wf)) {
-        fprintf(stderr, "parse inner file attributes failed.\n");
-        return false;
-    }
+    printf("parse all file attributes.\n");
+    parse_all_file_attrs(ph, wf);
     
-    printf("parse header part finish.\n");
-    return true;
+    printf("parse header success, the number of the file attributes is %d.\n", ph->attrList->length);
+}
+
+const char* format_windows_filetime_struct(const FILETIME* ft) {
+    PPE_ASSERT(ft != NULL);
+    
+    static char buf[64];
+    
+    ULARGE_INTEGER ull;
+    ull.LowPart = ft->dwLowDateTime;
+    ull.HighPart = ft->dwHighDateTime;
+
+    /* 
+        windows file time begins from 1601/01/01, but unix timestamp 
+        begins from 1970/01/01, so we have to minus this duration, 
+        that's where 11644473600LL seconds come from.
+        
+        uli.QuadPart accurates to 10 ^ -7 seconds.
+    */
+    time_t timestamp = (time_t)((ull.QuadPart / 10000000ULL) - 11644473600ULL);
+    struct tm *timeinfo = localtime(&timestamp);
+    strftime(buf, sizeof(buf) / sizeof(char), "%Y-%m-%d %H:%M:%S", timeinfo);
+    return buf;
+}
+
+void save_file_attr_list(PakHeader* ph) {
+    PPE_ASSERT(ph != NULL);
+    
+    printf("save file attributes.\n");
+    
+    const char* savPath = "popcap_pak_extractor_file_attr_list.txt";
+    FILE* savFile = fopen(savPath, "w");
+    if (savFile == NULL) {
+        fprintf(stderr, "can't save file attribute list to \"%s\"\n", savPath);
+        return;
+    }
+
+    const FileAttr* cursor = ph->attrList->head->next;
+
+    while (cursor != NULL) {
+        const char* lastWriteTime = format_windows_filetime_struct(&(cursor->lastWriteTime));
+        fprintf(savFile, "%s, %10d bytes, %s\n", lastWriteTime, cursor->fileSize, cursor->fileName);
+        cursor = cursor->next;
+    }
+
+    fclose(savFile);
+    printf("save file attributes to file \"%s\" success.\n", savPath);
 }
 
 void build_complete_path(char* buf, const char* extractPath, const char* fileName) {
@@ -444,7 +444,7 @@ bool is_dir_exist(const char* path) {
         && (dwAttrib & FILE_ATTRIBUTE_DIRECTORY));
 }
 
-bool recursive_create_parent_dirs(char* path) {
+void recursive_create_parent_dirs(char* path) {
     PPE_ASSERT(path != NULL);
     
     char* cursor = path;
@@ -456,7 +456,9 @@ bool recursive_create_parent_dirs(char* path) {
 
             if (!is_dir_exist(path)) {
                 if (!CreateDirectory(path, NULL)) {
-                    return false;
+                    DWORD err = GetLastError();
+                    fprintf(stderr, "can't create dir: %s, CreateDirectory() failed: %ld, %s\n", path, err, format_windows_error_code(err));
+                    exit(EXIT_FAILURE);
                 }
             }
 
@@ -466,11 +468,9 @@ bool recursive_create_parent_dirs(char* path) {
 
         ++cursor;
     }
-
-    return true;
 }
 
-bool save_single_file_data(const FileAttr* attr, WinFile* wf, HANDLE hFile, char* buf, int32_t bufLen) {
+void save_single_file_data(const FileAttr* attr, WinFile* wf, HANDLE hFile, char* buf, int32_t bufLen) {
     PPE_ASSERT(attr != NULL);
     PPE_ASSERT(wf != NULL);
     PPE_ASSERT(hFile != INVALID_HANDLE_VALUE);
@@ -479,31 +479,31 @@ bool save_single_file_data(const FileAttr* attr, WinFile* wf, HANDLE hFile, char
     int32_t fileSize = attr->fileSize;
     int32_t needLen;
     int32_t readLen;
+    DWORD err;
     
     while (fileSize > 0) {
         needLen = (fileSize < bufLen ? fileSize : bufLen);
         
-        if (!read_pak_file(wf, buf, needLen * sizeof(char), (LPDWORD)&readLen)) {
-            return false;
-        }
-        
+        read_pak_file(wf, buf, needLen * sizeof(char), (LPDWORD)&readLen);
         decode_bytes(buf, buf, readLen);
         
         if (!WriteFile(hFile, buf, readLen, NULL, NULL)) {
-            return false;
+            err = GetLastError();
+            fprintf(stderr, "save %s data failed, WriteFile() failed: %ld, %s\n", attr->fileName, err, format_windows_error_code(err));
+            exit(EXIT_FAILURE);
         }
 
         fileSize -= readLen;
     }
     
     if (!SetFileTime(hFile, NULL, NULL, &(attr->lastWriteTime))) {
-        return false;
+        err = GetLastError();
+        fprintf(stderr, "save %s data failed, SetFileTime() failed: %ld, %s\n", attr->fileName, err, format_windows_error_code(err));
+        exit(EXIT_FAILURE);
     }
-    
-    return true;
 }
 
-bool extract_single_file(const FileAttr* attr, WinFile* wf, const char* extractDir, char* buf, int32_t bufLen) {
+void extract_single_file(const FileAttr* attr, WinFile* wf, const char* extractDir, char* buf, int32_t bufLen) {
     PPE_ASSERT(attr != NULL);
     PPE_ASSERT(wf != NULL);
     PPE_ASSERT(extractDir != NULL);
@@ -512,90 +512,37 @@ bool extract_single_file(const FileAttr* attr, WinFile* wf, const char* extractD
     char path[MAX_PATH];
     build_complete_path(path, extractDir, attr->fileName);
     
-    if (!recursive_create_parent_dirs(path)) {
-        return false;
-    }
+    recursive_create_parent_dirs(path);
     
     HANDLE hFile = CreateFile(path, GENERIC_WRITE, 0, NULL, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
     if (hFile == INVALID_HANDLE_VALUE) {
-        return false;
+        DWORD err = GetLastError();
+        fprintf(stderr, "cannot create %s, CreateFile() failed: %ld, %s\n", path, err, format_windows_error_code(err));
+        exit(EXIT_FAILURE);
     }
     
-    if (!save_single_file_data(attr, wf, hFile, buf, bufLen)) {
-        CloseHandle(hFile);
-        return false;
-    }
-    
+    save_single_file_data(attr, wf, hFile, buf, bufLen);
     CloseHandle(hFile);
-    return true;
 }
 
-bool extract_inner_files(PakHeader* ph, WinFile* wf, const char* extractDir) {
+void extract_inner_files(PakHeader* ph, WinFile* wf, const char* extractDir) {
     PPE_ASSERT(ph != NULL);
     PPE_ASSERT(wf != NULL);
     PPE_ASSERT(extractDir != NULL);
+    
+    printf("extract inner files.\n");
     
     int32_t buf_size = 65536;
     char* buf = (char*)MALLOC_OR_ABORT(buf_size * sizeof(char));
     
     const FileAttr* cursor = ph->attrList->head->next;
     while (cursor != NULL) {
-        if (!extract_single_file(cursor, wf, extractDir, buf, buf_size)) {
-            free(buf);
-            fprintf(stderr, "extract inner files to \"%s\" failed.\n", extractDir);
-            return false;
-        }
-        
+        extract_single_file(cursor, wf, extractDir, buf, buf_size);
         cursor = cursor->next;
     }
     
     free(buf);
-    printf("extract inner files to \"%s\" finish.\n", extractDir);
-    return true;
-}
-
-const char* format_windows_filetime_struct(const FILETIME* ft) {
-    PPE_ASSERT(ft != NULL);
-    
-    static char buf[64];
-    
-    ULARGE_INTEGER ull;
-    ull.LowPart = ft->dwLowDateTime;
-    ull.HighPart = ft->dwHighDateTime;
-
-    /* 
-        windows file time begins from 1601/01/01, but unix timestamp 
-        begins from 1970/01/01, so we have to minus this duration, 
-        that's where 11644473600LL seconds come from.
-        
-        uli.QuadPart accurates to 10 ^ -7 seconds.
-    */
-    time_t timestamp = (time_t)((ull.QuadPart / 10000000ULL) - 11644473600ULL);
-    struct tm *timeinfo = localtime(&timestamp);
-    strftime(buf, sizeof(buf) / sizeof(char), "%Y-%m-%d %H:%M:%S", timeinfo);
-    return buf;
-}
-
-void save_file_attr_list(PakHeader* ph) {
-    PPE_ASSERT(ph != NULL);
-    
-    const char* savPath = "popcap_pak_extractor_file_attr_list.txt";
-    FILE* savFile = fopen(savPath, "w");
-    if (savFile == NULL) {
-        fprintf(stderr, "can't save file attribute list to \"%s\"\n", savPath);
-        return;
-    }
-
-    const FileAttr* cursor = ph->attrList->head->next;
-
-    while (cursor != NULL) {
-        const char* lastWriteTime = format_windows_filetime_struct(&(cursor->lastWriteTime));
-        fprintf(savFile, "%s, %10d bytes, %s\n", lastWriteTime, cursor->fileSize, cursor->fileName);
-        cursor = cursor->next;
-    }
-
-    fclose(savFile);
-    printf("the number of file attributes is %d, they are saved at: \"%s\".\n", ph->attrList->length, savPath);
+    printf("extract inner files to dir \"%s\" success.\n", extractDir);
 }
 
 int main(int argc, char* argv[]) {
@@ -610,27 +557,13 @@ int main(int argc, char* argv[]) {
     }
     
     WinFile* wf = open_pak_file(argv[1]);
-    if (wf == NULL) {
-        fprintf(stderr, "can't read from file: %s\n", argv[1]);
-        return 1;
-    }
-    
     PakHeader* ph = create_pak_header();
     
-    if (!parse_header(ph, wf)) {
-        fprintf(stderr, "stop extract.\n");
-        goto finally;
-    }
-    
+    parse_header(ph, wf);
     save_file_attr_list(ph);
+    extract_inner_files(ph, wf, argv[2]);
     
-    if (!extract_inner_files(ph, wf, argv[2])) {
-        fprintf(stderr, "stop extract.\n");
-        goto finally;
-    }
-    
-finally:
-    close_pak_file(wf);
     destroy_pak_header(ph);
+    close_pak_file(wf);
     return 0;
 }
