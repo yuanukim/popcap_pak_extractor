@@ -219,7 +219,7 @@ class PakExtractor {
         }
     }
 
-    decltype(auto) write_win_filetime(const FILETIME& ft) {
+    system_clock::time_point convert_filetime_to_system_clock_time_point(const FILETIME& ft) {
         ULARGE_INTEGER uli;
     
         uli.HighPart = ft.dwHighDateTime;
@@ -230,12 +230,16 @@ class PakExtractor {
             begins from 1970/01/01, so we have to minus this duration, 
             that's where 11644473600LL seconds come from.
             
-            uli.QuadPart accurates to 10 ^ -7 seconds, so let it minus 116444736000000000LL first,
-            then convert it to a system_clock would work.
+            uli.QuadPart accurates to 10 ^ -7 seconds.
         */
-        system_clock::duration dur{ 100 * ((uint64_t)uli.QuadPart - 116444736000000000LL) };
+        seconds sec{ uli.QuadPart / 10000000 - 11644473600ULL };
+        system_clock::duration dur{ sec };
         system_clock::time_point tp{ dur };
-    
+        return tp;
+    }
+
+    decltype(auto) write_win_filetime(const FILETIME& ft) {
+        auto tp = convert_filetime_to_system_clock_time_point(ft);
         time_t seconds = system_clock::to_time_t(tp);
         tm* localTime = std::localtime(&seconds);
     
@@ -256,7 +260,8 @@ class PakExtractor {
             out << write_win_filetime(attr.lastWriteTime) << ", " << std::setw(10) << attr.fileSize << " bytes, " << attr.fileName.get() << "\n";
         }
 
-        std::cout << std::format("save file attributes to \"{}\" success.\n", savPath);
+        out.close();
+        std::cout << std::format("save file attributes to file \"{}\" success.\n", savPath);
     }
 
     /*
@@ -270,23 +275,7 @@ class PakExtractor {
         if using visual C++, the conversion could be easily replaced by using file_clock::duration and file_clock::time_point.
     */
     file_clock::time_point convert_win_FILETIME_to_file_clock(const FILETIME& ft) {
-        ULARGE_INTEGER uli;
-
-        uli.HighPart = ft.dwHighDateTime;
-        uli.LowPart = ft.dwLowDateTime;
-
-        /* 
-            windows file time begins from 1601/01/01, but unix timestamp 
-            begins from 1970/01/01, so we have to minus this duration, 
-            that's where 11644473600LL seconds  come from.
-            
-            uli.QuadPart accurates to 10 ^ -7 seconds, so let it minus 116444736000000000LL first,
-            then convert it to a system_clock would work.
-        */
-        uint64_t nanosec = (static_cast<uint64_t>(uli.QuadPart) - 116444736000000000LL) * 100;
-        
-        system_clock::duration dur{ nanosec };
-        system_clock::time_point tp{ dur };
+        auto tp = convert_filetime_to_system_clock_time_point(ft);
 
         /*
             accroding to the microsoft's document: https://learn.microsoft.com/en-us/cpp/standard-library/file-clock-class?view=msvc-170
@@ -350,7 +339,7 @@ public:
 
         std::cout << "extract inner files.\n";
         extract_inner_files(pakFile, rootPath);
-        std::cout << std::format("extract inner files to \"{}\" success.\n", rootPath);
+        std::cout << std::format("extract inner files to dir \"{}\" success.\n", rootPath);
     }
 };
 
