@@ -75,7 +75,7 @@ public:
         hFile = CreateFileA(path.c_str(), GENERIC_READ, 0, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
         if (hFile == INVALID_HANDLE_VALUE) {
             DWORD err = GetLastError();
-            std::cerr << std::format("cannot open {}, CreateFile() failed: {}, {}\n", path, err, get_win_err_msg(err));
+            std::cerr << std::format("cannot open {}, CreateFile() failed: {}, {}.\n", path, err, get_win_err_msg(err));
             throw std::runtime_error{ "open .pak file failed" };
         }
 
@@ -83,7 +83,7 @@ public:
         if (size == INVALID_FILE_SIZE) {
             DWORD err = GetLastError();
             CloseHandle(hFile);
-            std::cerr << std::format("cannot get size of {}, GetFileSize() failed: {}, {}\n", path, err, get_win_err_msg(err));
+            std::cerr << std::format("cannot get size of {}, GetFileSize() failed: {}, {}.\n", path, err, get_win_err_msg(err));
             throw std::runtime_error{ "open .pak file failed" };
         }
     }
@@ -102,7 +102,7 @@ public:
         DWORD numOfBytesRead;
         if (!ReadFile(hFile, (LPVOID)buf, numOfBytesToRead, &numOfBytesRead, nullptr)) {
             DWORD err = GetLastError();
-            std::cerr << std::format("cannot read from .pak file, ReadFile() failed: {}, {}\n", err, get_win_err_msg(err));
+            std::cerr << std::format("cannot read from .pak file, ReadFile() failed: {}, {}.\n", err, get_win_err_msg(err));
             throw std::runtime_error{ "read from .pak file failed" };
         }
 
@@ -248,7 +248,7 @@ class PakExtractor {
         constexpr const char* savPath = "pak_file_attributes.txt";
         std::ofstream out{ savPath };
         if (!out.is_open()) {
-            std::cerr << std::format("cannot save file attributes to \"{}\"\n", savPath);
+            std::cerr << std::format("cannot save file attributes to \"{}\".\n", savPath);
             return;
         }
 
@@ -256,7 +256,7 @@ class PakExtractor {
             out << write_win_filetime(attr.lastWriteTime) << ", " << std::setw(10) << attr.fileSize << " bytes, " << attr.fileName.get() << "\n";
         }
 
-        std::cout << std::format("save file attributes to \"{}\" success\n", savPath);
+        std::cout << std::format("save file attributes to \"{}\" success.\n", savPath);
     }
 
     /*
@@ -344,7 +344,7 @@ class PakExtractor {
 public:
     void operator()(PakFile& pakFile, const std::string& rootPath) {
         parse_header(pakFile);
-        std::cout << std::format("parse header success, the number of the file attributes is {}\n", header.fileAttrList.size());
+        std::cout << std::format("parse header success, the number of the file attributes is {}.\n", header.fileAttrList.size());
 
         save_file_attributes();
 
@@ -357,7 +357,7 @@ public:
 int main(int argc, char* argv[]) {
     try {
         if (argc != 3) {
-            std::cerr << std::format("usage: {} yours.pak savDir\n", argv[0]);
+            std::cerr << std::format("usage: {} yours.pak savDir.\n", argv[0]);
             return 1;
         }
 
@@ -371,7 +371,7 @@ int main(int argc, char* argv[]) {
         pe(pakFile, argv[2]);
     }
     catch(const std::exception& e) {
-        std::cerr << e.what() << "\n";
+        std::cerr << e.what() << ".\n";
     }
 
     return 0;
