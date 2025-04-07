@@ -101,7 +101,7 @@ const char* format_windows_error_code(DWORD errCode) {
 PakHeader* create_pak_header(void) {
     PakHeader* ph = (PakHeader*)malloc(sizeof(PakHeader));
     if (ph == NULL) {
-        fprintf(stderr, "create_pak_header() failed, no memory to create a PakHeader object.\n");
+        fprintf(stderr, "create_pak_header() failed, no memory to create a PakHeader object\n");
         return NULL;
     }
     
@@ -110,7 +110,7 @@ PakHeader* create_pak_header(void) {
     
     ph->attrList = (FileAttrList*)malloc(sizeof(FileAttrList));
     if (ph->attrList == NULL) {
-        fprintf(stderr, "create_pak_header() failed, no memory to create a attrList.\n");
+        fprintf(stderr, "create_pak_header() failed, no memory to create a attrList\n");
         goto err_clean_pak_header;
     }
     
@@ -118,7 +118,7 @@ PakHeader* create_pak_header(void) {
     
     ph->attrList->head = (FileAttr*)malloc(sizeof(FileAttr));
     if (ph->attrList->head == NULL) {
-        fprintf(stderr, "create_pak_header() failed, no memory to create a attrList head.\n");
+        fprintf(stderr, "create_pak_header() failed, no memory to create a attrList head\n");
         goto err_clean_attr_list;
     }
     
@@ -210,21 +210,21 @@ bool read_pak_file(WinFile* wf, char* buf, DWORD numOfBytesToRead, LPDWORD numOf
     PPE_ASSERT(numOfBytesRead != NULL);
     
     if (wf->size < numOfBytesToRead) {
-        fprintf(stderr, "read from .pak failed, this file maybe broken.\n");
+        fprintf(stderr, "read from .pak failed, this file maybe broken\n");
         return false;
     }
 
-    DWORD _numOfBytesRead;
-    if (!ReadFile(wf->hFile, (LPVOID)buf, numOfBytesToRead, &_numOfBytesRead, NULL)) {
+    DWORD temp;
+    if (!ReadFile(wf->hFile, (LPVOID)buf, numOfBytesToRead, &temp, NULL)) {
         DWORD err = GetLastError();
         fprintf(stderr, "read from .pak failed, ReadFile() failed: %ld, %s\n", err, format_windows_error_code(err));
         return false;
     }
     
-    wf->size -= _numOfBytesRead;
+    wf->size -= temp;
     
     if (numOfBytesRead != NULL) {
-        *numOfBytesRead = _numOfBytesRead;
+        *numOfBytesRead = temp;
     }
     
     return true;
@@ -467,12 +467,12 @@ const char* format_windows_filetime_struct(const FILETIME* ft) {
 void save_file_attr_list(PakHeader* ph) {
     PPE_ASSERT(ph != NULL);
     
-    printf("save file attributes.\n");
+    printf("save file attributes\n");
     
     const char* savPath = "pak_file_attributes.txt";
     FILE* savFile = fopen(savPath, "w");
     if (savFile == NULL) {
-        fprintf(stderr, "can't save file attribute list to \"%s\"\n", savPath);
+        fprintf(stderr, "can't save file attributes to \"%s\"\n", savPath);
         return;
     }
 
@@ -485,7 +485,7 @@ void save_file_attr_list(PakHeader* ph) {
     }
 
     fclose(savFile);
-    printf("save file attributes to file \"%s\" success.\n", savPath);
+    printf("save file attributes to file \"%s\" success\n", savPath);
 }
 
 void build_complete_path(char* buf, const char* extractPath, const char* fileName) {
@@ -602,7 +602,7 @@ bool extract_single_file(const FileAttr* attr, WinFile* wf, const char* extractD
     build_complete_path(path, extractDir, attr->fileName);
     
     if (!recursive_create_parent_dirs(path)) {
-        fprintf(stderr, "extract \"%s\" failed, cannot creat its parent dir\n", attr->fileName);
+        fprintf(stderr, "extract \"%s\" failed, cannot create its parent dir\n", attr->fileName);
         return false;
     }
     
@@ -628,7 +628,7 @@ bool extract_inner_files(PakHeader* ph, WinFile* wf, const char* extractDir) {
     PPE_ASSERT(wf != NULL);
     PPE_ASSERT(extractDir != NULL);
     
-    printf("extract inner files.\n");
+    printf("extract inner files\n");
     
     int32_t buf_size = 65536;
     char* buf = (char*)malloc(buf_size * sizeof(char));
@@ -649,7 +649,7 @@ bool extract_inner_files(PakHeader* ph, WinFile* wf, const char* extractDir) {
     }
     
     free(buf);
-    printf("extract inner files to dir \"%s\" success.\n", extractDir);
+    printf("extract inner files to dir \"%s\" success\n", extractDir);
     return true;
 }
 
@@ -660,7 +660,7 @@ int main(int argc, char* argv[]) {
     }
     
     if (is_dir_exist(argv[2])) {
-        fprintf(stderr, "given dir: \"%s\" is already existed.\n", argv[2]);
+        fprintf(stderr, "given dir: \"%s\" is already existed\n", argv[2]);
         return 1;
     }
     
