@@ -302,7 +302,6 @@ bool parse_version(PakHeader* ph, WinFile* wf) {
 }
 
 bool parse_file_name(WinFile* wf, FileAttr* attr) {
-    PPE_ASSERT(ph != NULL);
     PPE_ASSERT(wf != NULL);
     PPE_ASSERT(attr != NULL);
     
@@ -346,7 +345,6 @@ bool parse_file_size(WinFile* wf, FileAttr* attr) {
 }
 
 bool parse_file_last_write_time(WinFile* wf, FileAttr* attr) {
-    PPE_ASSERT(ph != NULL);
     PPE_ASSERT(wf != NULL);
     PPE_ASSERT(attr != NULL);
     
