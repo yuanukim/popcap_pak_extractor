@@ -169,20 +169,20 @@ WinFile* open_pak_file(const char* path) {
     HANDLE hFile = CreateFile(path, GENERIC_READ, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
     if (hFile == INVALID_HANDLE_VALUE) {
         DWORD err = GetLastError();
-        fprintf(stderr, "can't open .pak file: %s, CreateFile() failed: %ld, %s\n", path, err, format_windows_error_code(err));
+        fprintf(stderr, "can't open .pak file: \"%s\", CreateFile() failed: %ld, %s\n", path, err, format_windows_error_code(err));
         return NULL;
     }
     
     DWORD size = GetFileSize(hFile, NULL);
     if (size == INVALID_FILE_SIZE) {
         DWORD err = GetLastError();
-        fprintf(stderr, "can't open .pak file: %s, GetFileSize() failed: %ld, %s\n", path, err, format_windows_error_code(err));
+        fprintf(stderr, "can't open .pak file: \"%s\", GetFileSize() failed: %ld, %s\n", path, err, format_windows_error_code(err));
         goto err_clean_file;
     }
     
     WinFile* wf = (WinFile*)malloc(sizeof(WinFile));
     if (wf == NULL) {
-        fprintf(stderr, "can't open .pak file: %s, no memory to create a WinFile object\n", path);
+        fprintf(stderr, "can't open .pak file: \"%s\", no memory to create a WinFile object\n", path);
         goto err_clean_file;
     }
     
@@ -389,12 +389,12 @@ bool parse_all_file_attrs(PakHeader* ph, WinFile* wf) {
         }
         
         if (!parse_file_size(wf, attr)) {
-            fprintf(stderr, "parse all file attributes failed, cannot parse file size of %s\n", attr->fileName);
+            fprintf(stderr, "parse all file attributes failed, cannot parse file size of \"%s\"\n", attr->fileName);
             goto err_clean_file_attr_name;
         }
         
         if (!parse_file_last_write_time(wf, attr)) {
-            fprintf(stderr, "parse all file attributes failed, cannot parse file last write time of %s\n", attr->fileName);
+            fprintf(stderr, "parse all file attributes failed, cannot parse file last write time of \"%s\"\n", attr->fileName);
             goto err_clean_file_attr_name;
         }
         
@@ -538,7 +538,7 @@ bool recursive_create_parent_dirs(char* path) {
             if (!is_dir_exist(path)) {
                 if (!CreateDirectory(path, NULL)) {
                     DWORD err = GetLastError();
-                    fprintf(stderr, "can't create dir: %s, CreateDirectory() failed: %ld, %s\n", path, err, format_windows_error_code(err));
+                    fprintf(stderr, "can't create dir: \"%s\", CreateDirectory() failed: %ld, %s\n", path, err, format_windows_error_code(err));
                     return false;
                 }
             }
@@ -568,7 +568,7 @@ bool save_single_file_data(const FileAttr* attr, WinFile* wf, HANDLE hFile, char
         needLen = (fileSize < bufLen ? fileSize : bufLen);
         
         if (!read_pak_file(wf, buf, needLen * sizeof(char), (LPDWORD)&readLen)) {
-            fprintf(stderr, "save %s data failed, cannot read from the .pak file\n", attr->fileName);
+            fprintf(stderr, "save \"%s\" data failed, cannot read from the .pak file\n", attr->fileName);
             return false;
         }
         
@@ -576,7 +576,7 @@ bool save_single_file_data(const FileAttr* attr, WinFile* wf, HANDLE hFile, char
         
         if (!WriteFile(hFile, buf, readLen, NULL, NULL)) {
             err = GetLastError();
-            fprintf(stderr, "save %s data failed, WriteFile() failed: %ld, %s\n", attr->fileName, err, format_windows_error_code(err));
+            fprintf(stderr, "save \"%s\" data failed, WriteFile() failed: %ld, %s\n", attr->fileName, err, format_windows_error_code(err));
             return false;
         }
 
@@ -585,7 +585,7 @@ bool save_single_file_data(const FileAttr* attr, WinFile* wf, HANDLE hFile, char
     
     if (!SetFileTime(hFile, NULL, NULL, &(attr->lastWriteTime))) {
         err = GetLastError();
-        fprintf(stderr, "save %s data failed, SetFileTime() failed: %ld, %s\n", attr->fileName, err, format_windows_error_code(err));
+        fprintf(stderr, "save \"%s\" data failed, SetFileTime() failed: %ld, %s\n", attr->fileName, err, format_windows_error_code(err));
         return false;
     }
     
@@ -602,19 +602,19 @@ bool extract_single_file(const FileAttr* attr, WinFile* wf, const char* extractD
     build_complete_path(path, extractDir, attr->fileName);
     
     if (!recursive_create_parent_dirs(path)) {
-        fprintf(stderr, "extract %s failed, cannot creat its parent dir\n", attr->fileName);
+        fprintf(stderr, "extract \"%s\" failed, cannot creat its parent dir\n", attr->fileName);
         return false;
     }
     
     HANDLE hFile = CreateFile(path, GENERIC_WRITE, 0, NULL, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
     if (hFile == INVALID_HANDLE_VALUE) {
         DWORD err = GetLastError();
-        fprintf(stderr, "extract %s failed, cannot create %s, CreateFile() failed: %ld, %s\n", attr->fileName, path, err, format_windows_error_code(err));
+        fprintf(stderr, "extract \"%s\" failed, cannot create \"%s\", CreateFile() failed: %ld, %s\n", attr->fileName, path, err, format_windows_error_code(err));
         return false;
     }
     
     if (!save_single_file_data(attr, wf, hFile, buf, bufLen)) {
-        fprintf(stderr, "extract %s failed, cannot save its data\n", attr->fileName);
+        fprintf(stderr, "extract \"%s\" failed, cannot save its data\n", attr->fileName);
         CloseHandle(hFile);
         return false;
     }
@@ -640,7 +640,7 @@ bool extract_inner_files(PakHeader* ph, WinFile* wf, const char* extractDir) {
     const FileAttr* cursor = ph->attrList->head->next;
     while (cursor != NULL) {
         if (!extract_single_file(cursor, wf, extractDir, buf, buf_size)) {
-            fprintf(stderr, "extract inner failes failed, cannot extract: %s\n", cursor->fileName);
+            fprintf(stderr, "extract inner failes failed, cannot extract: \"%s\"\n", cursor->fileName);
             free(buf);
             return false;
         }
@@ -660,13 +660,13 @@ int main(int argc, char* argv[]) {
     }
     
     if (is_dir_exist(argv[2])) {
-        fprintf(stderr, "given dir: %s is already existed.\n", argv[2]);
+        fprintf(stderr, "given dir: \"%s\" is already existed.\n", argv[2]);
         return 1;
     }
     
     WinFile* wf = open_pak_file(argv[1]);
     if (wf == NULL) {
-        fprintf(stderr, "%s cannot be opened, this program stop\n", argv[1]);
+        fprintf(stderr, "\"%s\" cannot be opened, this program stop\n", argv[1]);
         return 1;
     }
     
