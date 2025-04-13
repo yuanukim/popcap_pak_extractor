@@ -1,5 +1,5 @@
 /**
- * @author yuanshixi
+ * @author yuanukim
  * @brief PopCap's .pak file extractor, written in C++20, only works for windows platform.
  * 
  * a very big thanks to https://github.com/nathaniel-daniel/popcap-pak-rs for giving 
@@ -36,6 +36,7 @@
 #include <memory>
 #include <algorithm>
 #include <filesystem>
+#include <source_location>
 #include <chrono>
 #include <utility>
 #include <vector>
@@ -63,9 +64,43 @@ struct Header {
     std::vector<FileAttr> fileAttrList;
 };
 
-std::string get_win_err_msg(DWORD errCode) {
-    return std::system_category().message(static_cast<int>(errCode));
-}
+class SystemError : public std::runtime_error {
+    std::string get_win_err_msg(DWORD errCode) {
+        return std::system_category().message(static_cast<int>(errCode));
+    }
+
+    std::string build_err_msg(DWORD errCode, const std::string& msg, const std::source_location& loc) {
+        return std::format("file: {}, func: {}, line: {}, {}, windows code: {}, {}", loc.file_name(), loc.function_name(), loc.line(), msg, errCode, get_win_err_msg(errCode));
+    }
+public:
+    SystemError(DWORD errCode, const std::string& msg, const std::source_location& loc = std::source_location::current())
+        : std::runtime_error{ build_err_msg(errCode, msg, loc) }
+    {}
+};
+
+class InvalidPakMagic : public std::runtime_error {
+    std::string build_err_msg(const std::source_location& loc) {
+        return std::format("file: {}, func: {}, line: {}, invalid .pak magic", loc.file_name(), loc.function_name(), loc.line());
+    }
+public:
+    InvalidPakMagic(const std::source_location& loc = std::source_location::current()) : std::runtime_error{ build_err_msg(loc) } {}
+};
+
+class InvalidPakVersion : public std::runtime_error {
+    std::string build_err_msg(const std::source_location& loc) {
+        return std::format("file: {}, func: {}, line: {}, invalid .pak version", loc.file_name(), loc.function_name(), loc.line());
+    }
+public:
+    InvalidPakVersion(const std::source_location& loc = std::source_location::current()) : std::runtime_error{ build_err_msg(loc) } {}
+};
+
+class FileBrokenException : public std::runtime_error {
+    std::string build_err_msg(const std::string& msg, const std::source_location& loc) {
+        return std::format("file: {}, func: {}, line: {}, {}, file maybe broken", loc.file_name(), loc.function_name(), loc.line(), msg);
+    }
+public:
+    FileBrokenException(const std::string& msg, const std::source_location& loc = std::source_location::current()) : std::runtime_error { build_err_msg(msg, loc) } {}
+};
 
 class PakFile {
     HANDLE hFile;
@@ -75,16 +110,14 @@ public:
         hFile = CreateFileA(path.c_str(), GENERIC_READ, 0, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
         if (hFile == INVALID_HANDLE_VALUE) {
             DWORD err = GetLastError();
-            std::cerr << std::format("cannot open {}, CreateFile() failed: {}, {}.\n", path, err, get_win_err_msg(err));
-            throw std::runtime_error{ "open .pak file failed" };
+            throw SystemError{ err, std::format("cannot open {}, CreateFile() failed", path) };
         }
 
         size = GetFileSize(hFile, nullptr);
         if (size == INVALID_FILE_SIZE) {
             DWORD err = GetLastError();
             CloseHandle(hFile);
-            std::cerr << std::format("cannot get size of {}, GetFileSize() failed: {}, {}.\n", path, err, get_win_err_msg(err));
-            throw std::runtime_error{ "open .pak file failed" };
+            throw SystemError{ err, std::format("cannot get file size of {}, GetFileSize() failed", path) };
         }
     }
 
@@ -95,15 +128,13 @@ public:
     template<CharType type>
     DWORD read(type* buf, DWORD numOfBytesToRead) {
         if (size < numOfBytesToRead) {
-            std::cerr << std::format("cannot read the require {} bytes, file may be broken.\n", numOfBytesToRead);
-            throw std::runtime_error{ "read from .pak file failed" };
+            throw FileBrokenException{ std::format("cannot read the require {} bytes", numOfBytesToRead) };
         }
 
         DWORD numOfBytesRead;
         if (!ReadFile(hFile, (LPVOID)buf, numOfBytesToRead, &numOfBytesRead, nullptr)) {
             DWORD err = GetLastError();
-            std::cerr << std::format("cannot read from .pak file, ReadFile() failed: {}, {}.\n", err, get_win_err_msg(err));
-            throw std::runtime_error{ "read from .pak file failed" };
+            throw SystemError{ err, "cannot read from .pak file, ReadFile() failed" };
         }
 
         size -= numOfBytesRead;
@@ -192,16 +223,14 @@ class PakExtractor {
         parse_magic(pakFile);
 
         if (!check_magic()) {
-            std::cerr << "cannot parse magic from given .pak file.\n";
-            throw std::runtime_error{ "parse header failed" };
+            throw InvalidPakMagic{};
         }
 
         std::cout << "parse version.\n";
         parse_version(pakFile);
 
         if (!check_version()) {
-            std::cerr << "cannot parse version from given .pak file.\n";
-            throw std::runtime_error{ "parse header failed" };
+            throw InvalidPakVersion{};
         }
 
         std::cout << "parse all file attributes.\n";
@@ -344,19 +373,20 @@ public:
 };
 
 int main(int argc, char* argv[]) {
+    if (argc != 3) {
+        std::cerr << std::format("usage: {} yours.pak savDir.\n", argv[0]);
+        return 1;
+    }
+
+    if (fs::is_directory(argv[2])) {
+        std::cerr << std::format("dir: {} is already exists.\n", argv[2]);
+        return 1;
+    }
+
+    PakFile pakFile{ argv[1] };
+    PakExtractor pe;
+
     try {
-        if (argc != 3) {
-            std::cerr << std::format("usage: {} yours.pak savDir.\n", argv[0]);
-            return 1;
-        }
-
-        if (fs::is_directory(argv[2])) {
-            std::cerr << std::format("dir: {} is already exists.\n", argv[2]);
-            return 1;
-        }
-
-        PakFile pakFile{ argv[1] };
-        PakExtractor pe;
         pe(pakFile, argv[2]);
     }
     catch(const std::exception& e) {
