@@ -98,10 +98,33 @@ const char* format_windows_error_code(DWORD errCode) {
     return winErrMsg;
 }
 
+FileAttr* create_file_attr(void) {
+    FileAttr* attr = (FileAttr*)malloc(sizeof(FileAttr));
+    
+    if (attr == NULL) {
+        fprintf(stderr, "[ERROR] %s: no enough memory to hold a FileAttr object\n", __func__);
+        return NULL;
+    }
+    
+    attr->fileName = NULL;
+    attr->next = NULL;
+    return attr;
+}
+
+void destroy_file_attr(FileAttr* attr) {
+    if (attr) {
+        if (attr->fileName) {
+            free(attr->fileName);
+        }
+        
+        free(attr);
+    }
+}
+
 PakHeader* create_pak_header(void) {
     PakHeader* ph = (PakHeader*)malloc(sizeof(PakHeader));
     if (ph == NULL) {
-        fprintf(stderr, "%s: no enough memory to create a PakHeader object\n", __func__);
+        fprintf(stderr, "[ERROR] %s: no enough memory to create a PakHeader object\n", __func__);
         return NULL;
     }
     
@@ -110,7 +133,7 @@ PakHeader* create_pak_header(void) {
     
     ph->attrList = (FileAttrList*)malloc(sizeof(FileAttrList));
     if (ph->attrList == NULL) {
-        fprintf(stderr, "%s: no enough memory to create a attrList\n", __func__);
+        fprintf(stderr, "[ERROR] %s: no enough memory to create a attrList\n", __func__);
         goto err_clean_pak_header;
     }
     
@@ -118,7 +141,7 @@ PakHeader* create_pak_header(void) {
     
     ph->attrList->head = (FileAttr*)malloc(sizeof(FileAttr));
     if (ph->attrList->head == NULL) {
-        fprintf(stderr, "%s: no enough memory to create a attrList head\n", __func__);
+        fprintf(stderr, "[ERROR] %s: no enough memory to create a attrList head\n", __func__);
         goto err_clean_attr_list;
     }
     
@@ -143,8 +166,7 @@ void destroy_pak_header(PakHeader* ph) {
             temp = cursor;
             cursor = cursor->next;
 
-            free(temp->fileName);
-            free(temp);
+            destroy_file_attr(temp);
         }
 
         free(ph->attrList->head);
@@ -169,20 +191,20 @@ WinFile* open_pak_file(const char* path) {
     HANDLE hFile = CreateFile(path, GENERIC_READ, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
     if (hFile == INVALID_HANDLE_VALUE) {
         DWORD err = GetLastError();
-        fprintf(stderr, "%s: cannot get the file handle of \"%s\": %ld, %s\n", __func__, path, err, format_windows_error_code(err));
+        fprintf(stderr, "[ERROR] %s: cannot get the file handle of \"%s\": %ld, %s\n", __func__, path, err, format_windows_error_code(err));
         return NULL;
     }
     
     DWORD size = GetFileSize(hFile, NULL);
     if (size == INVALID_FILE_SIZE) {
         DWORD err = GetLastError();
-        fprintf(stderr, "%s: cannot get file size of \"%s\": %ld, %s\n", __func__, path, err, format_windows_error_code(err));
+        fprintf(stderr, "[ERROR] %s: cannot get file size of \"%s\": %ld, %s\n", __func__, path, err, format_windows_error_code(err));
         goto err_clean_file;
     }
     
     WinFile* wf = (WinFile*)malloc(sizeof(WinFile));
     if (wf == NULL) {
-        fprintf(stderr, "%s: no enough memory to create a WinFile object on \"%s\"\n", __func__, path);
+        fprintf(stderr, "[ERROR] %s: no enough memory to create a WinFile object on \"%s\"\n", __func__, path);
         goto err_clean_file;
     }
     
@@ -210,14 +232,14 @@ bool read_pak_file(WinFile* wf, char* buf, DWORD numOfBytesToRead, LPDWORD numOf
     PPE_ASSERT(numOfBytesRead != NULL);
     
     if (wf->size < numOfBytesToRead) {
-        fprintf(stderr, "%s: remaing file size is less than required %ld bytes, .pak file maybe broken\n", __func__, numOfBytesToRead);
+        fprintf(stderr, "[ERROR] %s: remaing file size is less than required %ld bytes, .pak file maybe broken\n", __func__, numOfBytesToRead);
         return false;
     }
 
     DWORD temp;
     if (!ReadFile(wf->hFile, (LPVOID)buf, numOfBytesToRead, &temp, NULL)) {
         DWORD err = GetLastError();
-        fprintf(stderr, "%s: cannot read from file to get %ld bytes: %ld, %s\n", __func__, numOfBytesToRead, err, format_windows_error_code(err));
+        fprintf(stderr, "[ERROR] %s: cannot read from file to get %ld bytes: %ld, %s\n", __func__, numOfBytesToRead, err, format_windows_error_code(err));
         return false;
     }
     
@@ -267,7 +289,7 @@ bool parse_end_flag(WinFile* wf, UCHAR* endFlag) {
     PPE_ASSERT(endFlag != NULL);
     
     if (!read_pak_file(wf, (char*)endFlag, sizeof(UCHAR), NULL)) {
-        fprintf(stderr, "%s: cannot read from the .pak file\n", __func__);
+        fprintf(stderr, "[ERROR] %s: cannot read from the .pak file\n", __func__);
         return false;
     }
     
@@ -280,7 +302,7 @@ bool parse_magic(PakHeader* ph, WinFile* wf) {
     PPE_ASSERT(wf != NULL);
     
     if (!read_pak_file(wf, (char*)ph->magic, sizeof(ph->magic), NULL)) {
-        fprintf(stderr, "%s: cannot read from the .pak file\n", __func__);
+        fprintf(stderr, "[ERROR] %s: cannot read from the .pak file\n", __func__);
         return false;
     }
     
@@ -293,7 +315,7 @@ bool parse_version(PakHeader* ph, WinFile* wf) {
     PPE_ASSERT(wf != NULL);
     
     if (!read_pak_file(wf, (char*)ph->version, sizeof(ph->version), NULL)) {
-        fprintf(stderr, "%s: cannot read from the .pak file\n", __func__);
+        fprintf(stderr, "[ERROR] %s: cannot read from the .pak file\n", __func__);
         return false;
     }
     
@@ -307,20 +329,22 @@ bool parse_file_name(WinFile* wf, FileAttr* attr) {
     
     UCHAR byte;
     if (!read_pak_file(wf, (char*)&byte, sizeof(byte), NULL)) {
-        fprintf(stderr, "%s: cannot read from the .pak file, get file name length failed\n", __func__);
+        fprintf(stderr, "[ERROR] %s: cannot read from the .pak file, get file name length failed\n", __func__);
         return false;
     }
     
     int32_t filenameLen = (int32_t)decode_one_byte(byte);
     attr->fileName = (char*)malloc((filenameLen + 1) * sizeof(char));
     if (attr->fileName == NULL) {
-        fprintf(stderr, "%s: no enough memory to hold filename\n", __func__);
+        fprintf(stderr, "[ERROR] %s: no enough memory to hold filename\n", __func__);
         return false;
     }
     
     if (!read_pak_file(wf, attr->fileName, filenameLen * sizeof(char), NULL)) {
+        fprintf(stderr, "[ERROR] %s: cannot read from the .pak file, get filename failed\n", __func__);
+        
         free(attr->fileName);
-        fprintf(stderr, "%s: cannot read from the .pak file, get filename failed\n", __func__);
+        attr->fileName = NULL;
         return false;
     }
     
@@ -336,7 +360,7 @@ bool parse_file_size(WinFile* wf, FileAttr* attr) {
     UCHAR* buf = (UCHAR*)(&(attr->fileSize));
     
     if (!read_pak_file(wf, (char*)buf, sizeof(attr->fileSize), NULL)) {
-        fprintf(stderr, "%s: cannot read from the .pak file, get file size failed\n", __func__);
+        fprintf(stderr, "[ERROR] %s: cannot read from the .pak file, get file size failed\n", __func__);
         return false;
     }
     
@@ -351,7 +375,7 @@ bool parse_file_last_write_time(WinFile* wf, FileAttr* attr) {
     UCHAR* buf = (UCHAR*)(&(attr->lastWriteTime));
 
     if (!read_pak_file(wf, (char*)buf, sizeof(attr->lastWriteTime), NULL)) {
-        fprintf(stderr, "%s: cannot read from the .pak file, get file last write time failed\n", __func__);
+        fprintf(stderr, "[ERROR] %s: cannot read from the .pak file, get file last write time failed\n", __func__);
         return false;
     }
     
@@ -369,7 +393,7 @@ bool parse_all_file_attrs(PakHeader* ph, WinFile* wf) {
         UCHAR endFlag;
         
         if (!parse_end_flag(wf, &endFlag)) {
-            fprintf(stderr, "%s: parse end flag of the header failed\n", __func__);
+            fprintf(stderr, "[ERROR] %s: parse end flag of the header failed\n", __func__);
             return false;
         }
         
@@ -377,25 +401,25 @@ bool parse_all_file_attrs(PakHeader* ph, WinFile* wf) {
             break;
         }
         
-        attr = (FileAttr*)malloc(sizeof(FileAttr));
+        attr = create_file_attr();
         if (attr == NULL) {
-            fprintf(stderr, "%s: no enough memory to create a FileAttr object\n", __func__);
+            fprintf(stderr, "[ERROR] %s: cannot create a FileAttr object\n", __func__);
             return false;
         }
         
         if (!parse_file_name(wf, attr)) {
-            fprintf(stderr, "%s: parse one file name failed\n", __func__);
-            goto err_clean_file_attr;
+            fprintf(stderr, "[ERROR] %s: parse one file name failed\n", __func__);
+            goto meets_error;
         }
         
         if (!parse_file_size(wf, attr)) {
-            fprintf(stderr, "%s: parse one file size failed on \"%s\"\n", __func__, attr->fileName);
-            goto err_clean_file_attr_name;
+            fprintf(stderr, "[ERROR] %s: parse one file size failed on \"%s\"\n", __func__, attr->fileName);
+            goto meets_error;
         }
         
         if (!parse_file_last_write_time(wf, attr)) {
-            fprintf(stderr, "%s: parse one file last write time failed on \"%s\"\n", __func__, attr->fileName);
-            goto err_clean_file_attr_name;
+            fprintf(stderr, "[ERROR] %s: parse one file last write time failed on \"%s\"\n", __func__, attr->fileName);
+            goto meets_error;
         }
         
         pak_header_add_attr(ph, attr);
@@ -403,11 +427,8 @@ bool parse_all_file_attrs(PakHeader* ph, WinFile* wf) {
     
     return true;
     
-err_clean_file_attr_name:
-    free(attr->fileName);
-err_clean_file_attr:
-    free(attr);
-    
+meets_error:
+    destroy_file_attr(attr);
     return false;
 }
 
@@ -415,35 +436,35 @@ bool parse_header(PakHeader* ph, WinFile* wf) {
     PPE_ASSERT(ph != NULL);
     PPE_ASSERT(wf != NULL);
     
-    printf("parse magic\n");
+    printf("[INFO] parse magic\n");
     if (!parse_magic(ph, wf)) {
-        fprintf(stderr, "%s: parse magic failed\n", __func__);
+        fprintf(stderr, "[ERROR] %s: parse magic failed\n", __func__);
         return false;
     }
     
     if (!check_magic(ph)) {
-        fprintf(stderr, "%s: check magic failed\n", __func__);
+        fprintf(stderr, "[ERROR] %s: check magic failed\n", __func__);
         return false;
     }
     
-    printf("parse version\n");
+    printf("[INFO] parse version\n");
     if (!parse_version(ph, wf)) {
-        fprintf(stderr, "%s: parse version failed\n", __func__);
+        fprintf(stderr, "[ERROR] %s: parse version failed\n", __func__);
         return false;
     }
     
     if (!check_version(ph)) {
-        fprintf(stderr, "%s: check version failed\n", __func__);
+        fprintf(stderr, "[ERROR] %s: check version failed\n", __func__);
         return false;
     }
     
-    printf("parse all file attributes\n");
+    printf("[INFO] parse all file attributes\n");
     if (!parse_all_file_attrs(ph, wf)) {
-        fprintf(stderr, "%s: parse all file attributes failed\n", __func__);
+        fprintf(stderr, "[ERROR] %s: parse all file attributes failed\n", __func__);
         return false;
     }
     
-    printf("parse header success, the number of the file attributes is %d\n", ph->attrList->length);
+    printf("[INFO] parse header success, the number of the file attributes is %d\n", ph->attrList->length);
     return true;
 }
 
@@ -472,12 +493,12 @@ const char* format_windows_filetime_struct(const FILETIME* ft) {
 void save_file_attr_list(PakHeader* ph) {
     PPE_ASSERT(ph != NULL);
     
-    printf("save file attributes\n");
+    printf("[INFO] save file attributes\n");
     
     const char* savPath = "pak_file_attributes.txt";
     FILE* savFile = fopen(savPath, "w");
     if (savFile == NULL) {
-        fprintf(stderr, "%s: cannot save file attributes to \"%s\"\n", __func__, savPath);
+        fprintf(stderr, "[ERROR] %s: cannot save file attributes to \"%s\"\n", __func__, savPath);
         return;
     }
 
@@ -490,7 +511,7 @@ void save_file_attr_list(PakHeader* ph) {
     }
 
     fclose(savFile);
-    printf("save file attributes to file \"%s\" success\n", savPath);
+    printf("[INFO] save file attributes to file \"%s\" success\n", savPath);
 }
 
 void build_complete_path(char* buf, const char* extractPath, const char* fileName) {
@@ -543,7 +564,7 @@ bool recursive_create_parent_dirs(char* path) {
             if (!is_dir_exist(path)) {
                 if (!CreateDirectory(path, NULL)) {
                     DWORD err = GetLastError();
-                    fprintf(stderr, "%s: can't create dir: \"%s\", CreateDirectory() failed: %ld, %s\n", __func__, path, err, format_windows_error_code(err));
+                    fprintf(stderr, "[ERROR] %s: can't create dir: \"%s\", CreateDirectory() failed: %ld, %s\n", __func__, path, err, format_windows_error_code(err));
                     return false;
                 }
             }
@@ -573,7 +594,7 @@ bool save_single_file_data(const FileAttr* attr, WinFile* wf, HANDLE hFile, char
         needLen = (fileSize < bufLen ? fileSize : bufLen);
         
         if (!read_pak_file(wf, buf, needLen * sizeof(char), (LPDWORD)&readLen)) {
-            fprintf(stderr, "%s: cannot read from \"%s\"\n", __func__, attr->fileName);
+            fprintf(stderr, "[ERROR] %s: cannot read from \"%s\"\n", __func__, attr->fileName);
             return false;
         }
         
@@ -581,7 +602,7 @@ bool save_single_file_data(const FileAttr* attr, WinFile* wf, HANDLE hFile, char
         
         if (!WriteFile(hFile, buf, readLen, NULL, NULL)) {
             err = GetLastError();
-            fprintf(stderr, "%s: cannot write to \"%s\": %ld, %s\n", __func__, attr->fileName, err, format_windows_error_code(err));
+            fprintf(stderr, "[ERROR] %s: cannot write to \"%s\": %ld, %s\n", __func__, attr->fileName, err, format_windows_error_code(err));
             return false;
         }
 
@@ -590,7 +611,7 @@ bool save_single_file_data(const FileAttr* attr, WinFile* wf, HANDLE hFile, char
     
     if (!SetFileTime(hFile, NULL, NULL, &(attr->lastWriteTime))) {
         err = GetLastError();
-        fprintf(stderr, "%s: cannot set the last write time to \"%s\": %ld, %s\n", __func__, attr->fileName, err, format_windows_error_code(err));
+        fprintf(stderr, "[ERROR] %s: cannot set the last write time to \"%s\": %ld, %s\n", __func__, attr->fileName, err, format_windows_error_code(err));
         return false;
     }
     
@@ -607,19 +628,19 @@ bool extract_single_file(const FileAttr* attr, WinFile* wf, const char* extractD
     build_complete_path(path, extractDir, attr->fileName);
     
     if (!recursive_create_parent_dirs(path)) {
-        fprintf(stderr, "%s: cannot create parent dir of \"%s\"\n", __func__, attr->fileName);
+        fprintf(stderr, "[ERROR] %s: cannot create parent dir of \"%s\"\n", __func__, attr->fileName);
         return false;
     }
     
     HANDLE hFile = CreateFile(path, GENERIC_WRITE, 0, NULL, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
     if (hFile == INVALID_HANDLE_VALUE) {
         DWORD err = GetLastError();
-        fprintf(stderr, "%s: cannot create a file named \"%s\": %ld, %s\n", __func__, path, err, format_windows_error_code(err));
+        fprintf(stderr, "[ERROR] %s: cannot create a file named \"%s\": %ld, %s\n", __func__, path, err, format_windows_error_code(err));
         return false;
     }
     
     if (!save_single_file_data(attr, wf, hFile, buf, bufLen)) {
-        fprintf(stderr, "%s: save the data of \"%s\" failed\n", __func__, attr->fileName);
+        fprintf(stderr, "[ERROR] %s: save the data of \"%s\" failed\n", __func__, attr->fileName);
         CloseHandle(hFile);
         return false;
     }
@@ -633,19 +654,19 @@ bool extract_inner_files(PakHeader* ph, WinFile* wf, const char* extractDir) {
     PPE_ASSERT(wf != NULL);
     PPE_ASSERT(extractDir != NULL);
     
-    printf("extract inner files\n");
+    printf("[INFO] extract inner files\n");
     
     int32_t buf_size = 65536;
     char* buf = (char*)malloc(buf_size * sizeof(char));
     if (buf == NULL) {
-        fprintf(stderr, "%s: no enough memory to create a read buffer\n", __func__);
+        fprintf(stderr, "[ERROR] %s: no enough memory to create a read buffer\n", __func__);
         return false;
     }
     
     const FileAttr* cursor = ph->attrList->head->next;
     while (cursor != NULL) {
         if (!extract_single_file(cursor, wf, extractDir, buf, buf_size)) {
-            fprintf(stderr, "%s: extract the data of \"%s\" failed\n", __func__, cursor->fileName);
+            fprintf(stderr, "[ERROR] %s: extract the data of \"%s\" failed\n", __func__, cursor->fileName);
             free(buf);
             return false;
         }
@@ -654,7 +675,7 @@ bool extract_inner_files(PakHeader* ph, WinFile* wf, const char* extractDir) {
     }
     
     free(buf);
-    printf("extract inner files to dir \"%s\" success\n", extractDir);
+    printf("[INFO] extract inner files to dir \"%s\" success\n", extractDir);
     return true;
 }
 
@@ -665,31 +686,31 @@ int main(int argc, char* argv[]) {
     }
     
     if (is_dir_exist(argv[2])) {
-        fprintf(stderr, "given dir: \"%s\" is already existed\n", argv[2]);
+        fprintf(stderr, "[ERROR] given dir: \"%s\" is already existed\n", argv[2]);
         return 1;
     }
     
     WinFile* wf = open_pak_file(argv[1]);
     if (wf == NULL) {
-        fprintf(stderr, "cannot open \"%s\" as a valid .pak file, this program stop\n", argv[1]);
+        fprintf(stderr, "[ERROR] cannot open \"%s\" as a valid .pak file, stop\n", argv[1]);
         return 1;
     }
     
     PakHeader* ph = create_pak_header();
     if (ph == NULL) {
-        fprintf(stderr, "cannot create a .pak header object, this program stop\n");
+        fprintf(stderr, "[ERROR] cannot create a .pak header object, stop\n");
         goto final_clean_pak_file;
     }
     
     if (!parse_header(ph, wf)) {
-        fprintf(stderr, "parse header failed, this program stop\n");
+        fprintf(stderr, "[ERROR] process meets error, stop\n");
         goto final_clean_pak_header;
     }
     
     save_file_attr_list(ph);
     
     if (!extract_inner_files(ph, wf, argv[2])) {
-        fprintf(stderr, "extract the .pak data failed, this program stop\n");
+        fprintf(stderr, "[ERROR] process meets error, stop\n");
         goto final_clean_pak_header;
     }
     
