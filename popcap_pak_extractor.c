@@ -29,17 +29,18 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <stdarg.h>
 #include <string.h>
 #include <time.h>
 
 #define BYTES_OF_MAGIC       4
 #define BYTES_OF_VERSION     4
 #define BYTES_OF_FILE_SIZE   4
-#define BYTES_OF_FILE_TIME   sizeof(FILETIME)
+#define BYTES_OF_FILE_TIME   ((int32_t)sizeof(FILETIME))
 
 typedef struct FileAttr {
-    char* fileName;
-    int32_t fileSize;   /* here, must using 4 bytes integer. */
+    char* name;
+    int32_t size;
     FILETIME lastWriteTime;
     
     struct FileAttr* next;
@@ -52,32 +53,18 @@ typedef struct FileAttrList {
     int32_t length;
 } FileAttrList;
 
-typedef struct PakHeader {
+typedef struct WinFile {
+    HANDLE handle;
+    DWORD size;
+} WinFile;
+
+typedef struct Extractor {
     UCHAR magic[BYTES_OF_MAGIC];
     UCHAR version[BYTES_OF_VERSION];
     
     FileAttrList* attrList;
-} PakHeader;
-
-typedef struct WinFile {
-    HANDLE hFile;
-    DWORD size;
-} WinFile;
-
-/*
-    compile with -D ENABLE_PPE_ASSERT to let it work at the development/test stage. 
-*/
-#ifdef ENABLE_PPE_ASSERT
-    #define PPE_ASSERT(condition) do { \
-        if (!(condition)) { \
-            fprintf(stderr, "[%s|%s|%d] assert failed: %s\n", __FILE__, __func__, __LINE__, #condition); \
-            abort(); \
-        } \
-    } while(0)
-#else 
-    #define PPE_ASSERT(condition) \
-        ((void)0)
-#endif
+    WinFile* pakFile;
+} Extractor;
 
 /*
     using windows api to format error code into a human readable message.
@@ -98,68 +85,78 @@ const char* format_windows_error_code(DWORD errCode) {
     return winErrMsg;
 }
 
+/*
+    log error, this function will add '\n' automatically.
+*/
+void log_error(const char* fmt, ...) {
+    va_list args;
+    
+    fprintf(stderr, "[ERROR] ");
+    
+    va_start(args, fmt);
+    vfprintf(stderr, fmt, args);
+    va_end(args);
+    
+    fprintf(stderr, "\n");
+}
+
+/*
+    log windows error, this function will add '\n' automatically.
+*/
+void log_win_error(DWORD errCode, const char* fmt, ...) {
+    va_list args;
+    
+    fprintf(stderr, "[ERROR] ");
+    
+    va_start(args, fmt);
+    vfprintf(stderr, fmt, args);
+    va_end(args);
+    
+    fprintf(stderr, ", %ld, %s\n", errCode, format_windows_error_code(errCode));
+}
+
 FileAttr* create_file_attr(void) {
     FileAttr* attr = (FileAttr*)malloc(sizeof(FileAttr));
-    
     if (attr == NULL) {
-        fprintf(stderr, "[ERROR] %s: no enough memory to hold a FileAttr object\n", __func__);
+        log_error("%s, %d: malloc failed", __func__, __LINE__);
         return NULL;
     }
     
-    attr->fileName = NULL;
+    attr->name = NULL;
     attr->next = NULL;
     return attr;
 }
 
 void destroy_file_attr(FileAttr* attr) {
     if (attr) {
-        if (attr->fileName) {
-            free(attr->fileName);
-        }
-        
+        free(attr->name);
         free(attr);
     }
 }
 
-PakHeader* create_pak_header(void) {
-    PakHeader* ph = (PakHeader*)malloc(sizeof(PakHeader));
-    if (ph == NULL) {
-        fprintf(stderr, "[ERROR] %s: no enough memory to create a PakHeader object\n", __func__);
+FileAttrList* create_file_attr_list(void) {
+    FileAttrList* list = (FileAttrList*)malloc(sizeof(FileAttrList));
+    if (list == NULL) {
+        log_error("%s, %d: malloc failed to create FileAttrList object", __func__, __LINE__);
         return NULL;
     }
     
-    memset(&(ph->magic), 0, sizeof(ph->magic));
-    memset(&(ph->version), 0, sizeof(ph->version));
-    
-    ph->attrList = (FileAttrList*)malloc(sizeof(FileAttrList));
-    if (ph->attrList == NULL) {
-        fprintf(stderr, "[ERROR] %s: no enough memory to create a attrList\n", __func__);
-        goto err_clean_pak_header;
+    list->head = (FileAttr*)malloc(sizeof(FileAttr));
+    if (list->head == NULL) {
+        log_error("%s, %d: malloc failed to create FileAttr object", __func__, __LINE__);
+        free(list);
+        return NULL;
     }
     
-    ph->attrList->length = 0;
-    
-    ph->attrList->head = (FileAttr*)malloc(sizeof(FileAttr));
-    if (ph->attrList->head == NULL) {
-        fprintf(stderr, "[ERROR] %s: no enough memory to create a attrList head\n", __func__);
-        goto err_clean_attr_list;
-    }
-    
-    ph->attrList->head->next = NULL;
-    ph->attrList->tail = ph->attrList->head;
-    return ph;
-    
-err_clean_attr_list:
-    free(ph->attrList);
-err_clean_pak_header:
-    free(ph);
-
-    return NULL;
+    list->head->next = NULL;
+    list->tail = list->head;
+    list->length = 0;
+    return list;
 }
 
-void destroy_pak_header(PakHeader* ph) {
-    if (ph) {
-        FileAttr* cursor = ph->attrList->head->next;
+void destroy_file_attr_list(FileAttrList* list) {
+    if (list) {
+        FileAttr* cursor = list->head->next;
         FileAttr* temp;
 
         while (cursor != NULL) {
@@ -169,87 +166,114 @@ void destroy_pak_header(PakHeader* ph) {
             destroy_file_attr(temp);
         }
 
-        free(ph->attrList->head);
-        free(ph->attrList);
-        free(ph);
+        free(list->head);
+        free(list);
     }
 }
 
-void pak_header_add_attr(PakHeader* ph, FileAttr* attr) {
-    PPE_ASSERT(ph != NULL);
-    PPE_ASSERT(attr != NULL);
-    
+void file_attr_list_add(FileAttrList* list, FileAttr* attr) {
     attr->next = NULL;
-    ph->attrList->tail->next = attr;
-    ph->attrList->tail = ph->attrList->tail->next;
-    ph->attrList->length += 1;
+    
+    list->tail->next = attr;
+    list->tail = list->tail->next;
+    list->length += 1;
 }
 
-WinFile* open_pak_file(const char* path) {
-    PPE_ASSERT(path != NULL);
-    
-    HANDLE hFile = CreateFile(path, GENERIC_READ, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (hFile == INVALID_HANDLE_VALUE) {
+WinFile* create_win_file(const char* path) {
+    HANDLE h = CreateFile(path, GENERIC_READ, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h == INVALID_HANDLE_VALUE) {
         DWORD err = GetLastError();
-        fprintf(stderr, "[ERROR] %s: cannot get the file handle of \"%s\": %ld, %s\n", __func__, path, err, format_windows_error_code(err));
+        log_win_error(err, "%s, %d: CreateFile failed on \"%s\"", __func__, __LINE__, path);
         return NULL;
     }
     
-    DWORD size = GetFileSize(hFile, NULL);
+    DWORD size = GetFileSize(h, NULL);
     if (size == INVALID_FILE_SIZE) {
         DWORD err = GetLastError();
-        fprintf(stderr, "[ERROR] %s: cannot get file size of \"%s\": %ld, %s\n", __func__, path, err, format_windows_error_code(err));
-        goto err_clean_file;
+        log_win_error(err, "%s, %d: GetFileSize failed on \"%s\"", __func__, __LINE__, path);
+        CloseHandle(h);
+        return NULL;
     }
     
     WinFile* wf = (WinFile*)malloc(sizeof(WinFile));
     if (wf == NULL) {
-        fprintf(stderr, "[ERROR] %s: no enough memory to create a WinFile object on \"%s\"\n", __func__, path);
-        goto err_clean_file;
+        log_error("%s, %d: malloc failed", __func__, __LINE__);
+        CloseHandle(h);
+        return NULL;
     }
     
-    wf->hFile = hFile;
+    wf->handle = h;
     wf->size = size;
-    
     return wf;
-    
-err_clean_file:
-    CloseHandle(hFile);
-    
-    return NULL;
 }
 
-void close_pak_file(WinFile* wf) {
+void destroy_win_file(WinFile* wf) {
     if (wf) {
-        CloseHandle(wf->hFile);
+        if (wf->handle != INVALID_HANDLE_VALUE) {
+            CloseHandle(wf->handle);
+        }
+        
         free(wf);
     }
 }
 
-bool read_pak_file(WinFile* wf, char* buf, DWORD numOfBytesToRead, LPDWORD numOfBytesRead) {
-    PPE_ASSERT(wf != NULL);
-    PPE_ASSERT(buf != NULL);
-    PPE_ASSERT(numOfBytesRead != NULL);
-    
+/*
+    read from the WinFile object.
+    return INVALID_FILE_SIZE means error, else return the read length.
+*/
+bool win_file_read(WinFile* wf, char* buf, DWORD numOfBytesToRead, DWORD* readLen) {
     if (wf->size < numOfBytesToRead) {
-        fprintf(stderr, "[ERROR] %s: remaing file size is less than required %ld bytes, .pak file maybe broken\n", __func__, numOfBytesToRead);
+        log_error("%s, %d: remained file size is less than required, file maybe broken", __func__, __LINE__);
         return false;
     }
-
+    
     DWORD temp;
-    if (!ReadFile(wf->hFile, (LPVOID)buf, numOfBytesToRead, &temp, NULL)) {
+    if (!ReadFile(wf->handle, (LPVOID)buf, numOfBytesToRead, &temp, NULL)) {
         DWORD err = GetLastError();
-        fprintf(stderr, "[ERROR] %s: cannot read from file to get %ld bytes: %ld, %s\n", __func__, numOfBytesToRead, err, format_windows_error_code(err));
+        log_win_error(err, "%s, %d: ReadFile failed", __func__, __LINE__);
         return false;
     }
     
     wf->size -= temp;
     
-    if (numOfBytesRead != NULL) {
-        *numOfBytesRead = temp;
+    if (readLen != NULL) {
+        *readLen = temp;
     }
     
     return true;
+}
+
+Extractor* create_extractor(const char* path) {
+    Extractor* ext = (Extractor*)malloc(sizeof(Extractor));
+    if (ext == NULL) {
+        log_error("%s, %d: malloc failed", __func__, __LINE__);
+        return NULL;
+    }
+    
+    ext->attrList = create_file_attr_list();
+    if (ext->attrList == NULL) {
+        log_error("%s, %d: create_file_attr_list failed", __func__, __LINE__);
+        free(ext);
+        return NULL;
+    }
+    
+    ext->pakFile = create_win_file(path);
+    if (ext->pakFile == NULL) {
+        log_error("%s, %d: create_win_file failed", __func__, __LINE__);
+        destroy_file_attr_list(ext->attrList);
+        free(ext);
+        return NULL;
+    }
+    
+    return ext;
+}
+
+void destroy_extractor(Extractor* ext) {
+    if (ext) {
+        destroy_file_attr_list(ext->attrList);
+        destroy_win_file(ext->pakFile);
+        free(ext);
+    }
 }
 
 #define decode_one_byte(ch) \
@@ -262,105 +286,86 @@ bool read_pak_file(WinFile* wf, char* buf, DWORD numOfBytesToRead, LPDWORD numOf
     } \
 } while(0)
 
-bool check_end_flag(UCHAR flag) {
+bool check_magic(Extractor* ext) {
+    return (ext->magic[0] == 0xc0)
+        && (ext->magic[1] == 0x4a)
+        && (ext->magic[2] == 0xc0)
+        && (ext->magic[3] == 0xba);
+}
+
+bool check_version(Extractor* ext) {
+    return (ext->version[0] == 0x00)
+        && (ext->version[1] == 0x00)
+        && (ext->version[2] == 0x00)
+        && (ext->version[3] == 0x00);
+}
+
+bool reach_header_end(UCHAR flag) {
     return flag == 0x80;
 }
 
-bool check_magic(const PakHeader* ph) {
-    PPE_ASSERT(ph != NULL);
-    
-    return (ph->magic[0] == 0xc0)
-        && (ph->magic[1] == 0x4a)
-        && (ph->magic[2] == 0xc0)
-        && (ph->magic[3] == 0xba);
-}
-
-bool check_version(const PakHeader* ph) {
-    PPE_ASSERT(ph != NULL);
-    
-    return (ph->version[0] == 0x00)
-        && (ph->version[1] == 0x00)
-        && (ph->version[2] == 0x00)
-        && (ph->version[3] == 0x00);
-}
-
-bool parse_end_flag(WinFile* wf, UCHAR* endFlag) {
-    PPE_ASSERT(wf != NULL);
-    PPE_ASSERT(endFlag != NULL);
-    
-    if (!read_pak_file(wf, (char*)endFlag, sizeof(UCHAR), NULL)) {
-        fprintf(stderr, "[ERROR] %s: cannot read from the .pak file\n", __func__);
+bool parse_header_end_flag(Extractor* ext, UCHAR* flag) {
+    UCHAR temp;
+    if (!win_file_read(ext->pakFile, (char*)&temp, sizeof(temp), NULL)) {
+        log_error("%s, %d: win_file_read failed", __func__, __LINE__);
         return false;
     }
     
-    *endFlag = decode_one_byte(*endFlag);
+    *flag = decode_one_byte(temp);
     return true;
 }
 
-bool parse_magic(PakHeader* ph, WinFile* wf) {
-    PPE_ASSERT(ph != NULL);
-    PPE_ASSERT(wf != NULL);
-    
-    if (!read_pak_file(wf, (char*)ph->magic, sizeof(ph->magic), NULL)) {
-        fprintf(stderr, "[ERROR] %s: cannot read from the .pak file\n", __func__);
+bool parse_magic(Extractor* ext) {
+    if (!win_file_read(ext->pakFile, (char*)(ext->magic), sizeof(ext->magic), NULL)) {
+        log_error("%s, %d: win_file_read failed", __func__, __LINE__);
         return false;
     }
     
-    decode_bytes(ph->magic, ph->magic, BYTES_OF_MAGIC);
+    decode_bytes(ext->magic, ext->magic, BYTES_OF_MAGIC);
     return true;
 }
 
-bool parse_version(PakHeader* ph, WinFile* wf) {
-    PPE_ASSERT(ph != NULL);
-    PPE_ASSERT(wf != NULL);
-    
-    if (!read_pak_file(wf, (char*)ph->version, sizeof(ph->version), NULL)) {
-        fprintf(stderr, "[ERROR] %s: cannot read from the .pak file\n", __func__);
+bool parse_version(Extractor* ext) {
+    if (!win_file_read(ext->pakFile, (char*)(ext->version), sizeof(ext->version), NULL)) {
+        log_error("%s, %d: win_file_read failed", __func__, __LINE__);
         return false;
     }
     
-    decode_bytes(ph->version, ph->version, BYTES_OF_VERSION);
+    decode_bytes(ext->version, ext->version, BYTES_OF_VERSION);
     return true;
 }
 
-bool parse_file_name(WinFile* wf, FileAttr* attr) {
-    PPE_ASSERT(wf != NULL);
-    PPE_ASSERT(attr != NULL);
-    
+bool parse_file_name(Extractor* ext, FileAttr* attr) {
     UCHAR byte;
-    if (!read_pak_file(wf, (char*)&byte, sizeof(byte), NULL)) {
-        fprintf(stderr, "[ERROR] %s: cannot read from the .pak file, get file name length failed\n", __func__);
+    if (!win_file_read(ext->pakFile, (char*)&byte, sizeof(byte), NULL)) {
+        log_error("%s, %d: win_file_read failed", __func__, __LINE__);
         return false;
     }
     
     int32_t filenameLen = (int32_t)decode_one_byte(byte);
-    attr->fileName = (char*)malloc((filenameLen + 1) * sizeof(char));
-    if (attr->fileName == NULL) {
-        fprintf(stderr, "[ERROR] %s: no enough memory to hold filename\n", __func__);
+    char* name = (char*)malloc((filenameLen + 1) * sizeof(char));
+    if (name == NULL) {
+        log_error("%s, %d: malloc failed", __func__, __LINE__);
         return false;
     }
     
-    if (!read_pak_file(wf, attr->fileName, filenameLen * sizeof(char), NULL)) {
-        fprintf(stderr, "[ERROR] %s: cannot read from the .pak file, get filename failed\n", __func__);
-        
-        free(attr->fileName);
-        attr->fileName = NULL;
+    if (!win_file_read(ext->pakFile, name, filenameLen, NULL)) {
+        log_error("%s, %d: win_file_read failed", __func__, __LINE__);
+        free(name);
         return false;
     }
     
-    decode_bytes(attr->fileName, attr->fileName, filenameLen);
-    attr->fileName[filenameLen] = '\0';
+    decode_bytes(name, name, filenameLen);
+    name[filenameLen] = '\0';
+    attr->name = name;
     return true;
 }
 
-bool parse_file_size(WinFile* wf, FileAttr* attr) {
-    PPE_ASSERT(wf != NULL);
-    PPE_ASSERT(attr != NULL);
+bool parse_file_size(Extractor* ext, FileAttr* attr) {
+    char* buf = (char*)(&(attr->size));
     
-    UCHAR* buf = (UCHAR*)(&(attr->fileSize));
-    
-    if (!read_pak_file(wf, (char*)buf, sizeof(attr->fileSize), NULL)) {
-        fprintf(stderr, "[ERROR] %s: cannot read from the .pak file, get file size failed\n", __func__);
+    if (!win_file_read(ext->pakFile, buf, sizeof(attr->size), NULL)) {
+        log_error("%s, %d: win_file_read failed", __func__, __LINE__);
         return false;
     }
     
@@ -368,110 +373,96 @@ bool parse_file_size(WinFile* wf, FileAttr* attr) {
     return true;
 }
 
-bool parse_file_last_write_time(WinFile* wf, FileAttr* attr) {
-    PPE_ASSERT(wf != NULL);
-    PPE_ASSERT(attr != NULL);
+bool parse_file_last_write_time(Extractor* ext, FileAttr* attr) {
+    char* buf = (char*)(&(attr->lastWriteTime));
     
-    UCHAR* buf = (UCHAR*)(&(attr->lastWriteTime));
-
-    if (!read_pak_file(wf, (char*)buf, sizeof(attr->lastWriteTime), NULL)) {
-        fprintf(stderr, "[ERROR] %s: cannot read from the .pak file, get file last write time failed\n", __func__);
+    if (!win_file_read(ext->pakFile, buf, sizeof(attr->lastWriteTime), NULL)) {
+        log_error("%s, %d: win_file_read failed", __func__, __LINE__);
         return false;
     }
     
-    decode_bytes(buf, buf, (int32_t)BYTES_OF_FILE_TIME);
+    decode_bytes(buf, buf, BYTES_OF_FILE_TIME);
     return true;
 }
 
-bool parse_all_file_attrs(PakHeader* ph, WinFile* wf) {
-    PPE_ASSERT(ph != NULL);
-    PPE_ASSERT(wf != NULL);
-    
+bool parse_all_file_attrs(Extractor* ext) {
     FileAttr* attr;
+    UCHAR flag;
     
     while (true) {
-        UCHAR endFlag;
-        
-        if (!parse_end_flag(wf, &endFlag)) {
-            fprintf(stderr, "[ERROR] %s: parse end flag of the header failed\n", __func__);
+        if (!parse_header_end_flag(ext, &flag)) {
+            log_error("%s, %d: parse_header_end_flag failed", __func__, __LINE__);
             return false;
         }
         
-        if (check_end_flag(endFlag)) {
-            break;
+        if (reach_header_end(flag)) {
+            return true;
         }
         
         attr = create_file_attr();
-        if (attr == NULL) {
-            fprintf(stderr, "[ERROR] %s: cannot create a FileAttr object\n", __func__);
+        
+        if (!parse_file_name(ext, attr)) {
+            destroy_file_attr(attr);
+            log_error("%s, %d: parse_file_name failed", __func__, __LINE__);
             return false;
         }
         
-        if (!parse_file_name(wf, attr)) {
-            fprintf(stderr, "[ERROR] %s: parse one file name failed\n", __func__);
-            goto meets_error;
+        if (!parse_file_size(ext, attr)) {
+            destroy_file_attr(attr);
+            log_error("%s, %d: parse_file_size failed", __func__, __LINE__);
+            return false;
         }
         
-        if (!parse_file_size(wf, attr)) {
-            fprintf(stderr, "[ERROR] %s: parse one file size failed on \"%s\"\n", __func__, attr->fileName);
-            goto meets_error;
+        if (!parse_file_last_write_time(ext, attr)) {
+            destroy_file_attr(attr);
+            log_error("%s, %d: parse_file_last_write_time failed", __func__, __LINE__);
+            return false;
         }
         
-        if (!parse_file_last_write_time(wf, attr)) {
-            fprintf(stderr, "[ERROR] %s: parse one file last write time failed on \"%s\"\n", __func__, attr->fileName);
-            goto meets_error;
-        }
-        
-        pak_header_add_attr(ph, attr);
+        file_attr_list_add(ext->attrList, attr);
     }
-    
-    return true;
-    
-meets_error:
-    destroy_file_attr(attr);
-    return false;
 }
 
-bool parse_header(PakHeader* ph, WinFile* wf) {
-    PPE_ASSERT(ph != NULL);
-    PPE_ASSERT(wf != NULL);
+bool parse_header(Extractor* ext) {
+    printf("========= parse header =========\n");
     
     printf("[INFO] parse magic\n");
-    if (!parse_magic(ph, wf)) {
-        fprintf(stderr, "[ERROR] %s: parse magic failed\n", __func__);
+    
+    if (!parse_magic(ext)) {
+        log_error("%s, %d: parse_magic failed", __func__, __LINE__);
         return false;
     }
     
-    if (!check_magic(ph)) {
-        fprintf(stderr, "[ERROR] %s: check magic failed\n", __func__);
+    if (!check_magic(ext)) {
+        log_error("%s, %d: check_magic failed", __func__, __LINE__);
         return false;
     }
     
     printf("[INFO] parse version\n");
-    if (!parse_version(ph, wf)) {
-        fprintf(stderr, "[ERROR] %s: parse version failed\n", __func__);
+    
+    if (!parse_version(ext)) {
+        log_error("%s, %d: parse_version failed", __func__, __LINE__);
         return false;
     }
     
-    if (!check_version(ph)) {
-        fprintf(stderr, "[ERROR] %s: check version failed\n", __func__);
+    if (!check_version(ext)) {
+        log_error("%s, %d: check_version failed", __func__, __LINE__);
         return false;
     }
     
     printf("[INFO] parse all file attributes\n");
-    if (!parse_all_file_attrs(ph, wf)) {
-        fprintf(stderr, "[ERROR] %s: parse all file attributes failed\n", __func__);
+    
+    if (!parse_all_file_attrs(ext)) {
+        log_error("%s, %d: parse_all_file_attrs failed", __func__, __LINE__);
         return false;
     }
     
-    printf("[INFO] parse header success, the number of the file attributes is %d\n", ph->attrList->length);
+    printf("[INFO] parse header success, the number of the file attributes is %d\n", ext->attrList->length);
     return true;
 }
 
-const char* format_windows_filetime_struct(const FILETIME* ft) {
-    PPE_ASSERT(ft != NULL);
-    
-    static char buf[64];
+const char* format_windows_filetime(FILETIME* ft) {
+    static char buf[32];
     
     ULARGE_INTEGER ull;
     ull.LowPart = ft->dwLowDateTime;
@@ -490,23 +481,20 @@ const char* format_windows_filetime_struct(const FILETIME* ft) {
     return buf;
 }
 
-void save_file_attr_list(PakHeader* ph) {
-    PPE_ASSERT(ph != NULL);
-    
-    printf("[INFO] save file attributes\n");
+void save_file_attr_list(Extractor* ext) {
+    printf("========= save file attributes =========\n");
     
     const char* savPath = "pak_file_attributes.txt";
     FILE* savFile = fopen(savPath, "w");
     if (savFile == NULL) {
-        fprintf(stderr, "[ERROR] %s: cannot save file attributes to \"%s\"\n", __func__, savPath);
+        log_error("%s, %d: cannot save file attributes to \"%s\"\n", __func__, __LINE__, savPath);
         return;
     }
 
-    const FileAttr* cursor = ph->attrList->head->next;
-
+    FileAttr* cursor = ext->attrList->head->next;
     while (cursor != NULL) {
-        const char* lastWriteTime = format_windows_filetime_struct(&(cursor->lastWriteTime));
-        fprintf(savFile, "%s, %10d bytes, %s\n", lastWriteTime, cursor->fileSize, cursor->fileName);
+        const char* lastWriteTime = format_windows_filetime(&(cursor->lastWriteTime));
+        fprintf(savFile, "%s, %10d bytes, %s\n", lastWriteTime, cursor->size, cursor->name);
         cursor = cursor->next;
     }
 
@@ -514,11 +502,7 @@ void save_file_attr_list(PakHeader* ph) {
     printf("[INFO] save file attributes to file \"%s\" success\n", savPath);
 }
 
-void build_complete_path(char* buf, const char* extractPath, const char* fileName) {
-    PPE_ASSERT(buf != NULL);
-    PPE_ASSERT(extractPath != NULL);
-    PPE_ASSERT(fileName != NULL);
-    
+void build_complete_path(char* buf, const char* extractPath, const char* fileName) {    
     while (*extractPath != '\0') {
         *buf = *extractPath;
 
@@ -543,8 +527,6 @@ void build_complete_path(char* buf, const char* extractPath, const char* fileNam
 }
 
 bool is_dir_exist(const char* path) {
-    PPE_ASSERT(path != NULL);
-    
     DWORD dwAttrib = GetFileAttributes(path);
 
     return (dwAttrib != INVALID_FILE_ATTRIBUTES 
@@ -552,8 +534,6 @@ bool is_dir_exist(const char* path) {
 }
 
 bool recursive_create_parent_dirs(char* path) {
-    PPE_ASSERT(path != NULL);
-    
     char* cursor = path;
 
     while (*cursor != '\0') {
@@ -564,7 +544,7 @@ bool recursive_create_parent_dirs(char* path) {
             if (!is_dir_exist(path)) {
                 if (!CreateDirectory(path, NULL)) {
                     DWORD err = GetLastError();
-                    fprintf(stderr, "[ERROR] %s: can't create dir: \"%s\", CreateDirectory() failed: %ld, %s\n", __func__, path, err, format_windows_error_code(err));
+                    log_win_error(err, "%s, %d: CreateDirectory failed on \"%s\"", __func__, __LINE__, path);
                     return false;
                 }
             }
@@ -579,30 +559,26 @@ bool recursive_create_parent_dirs(char* path) {
     return true;
 }
 
-bool save_single_file_data(const FileAttr* attr, WinFile* wf, HANDLE hFile, char* buf, int32_t bufLen) {
-    PPE_ASSERT(attr != NULL);
-    PPE_ASSERT(wf != NULL);
-    PPE_ASSERT(hFile != INVALID_HANDLE_VALUE);
-    PPE_ASSERT(buf != NULL);
-    
-    int32_t fileSize = attr->fileSize;
+bool save_single_file_data(FileAttr* attr, WinFile* wf, HANDLE hFile, char* buf, int32_t bufLen) {
+    int32_t fileSize = attr->size;
     int32_t needLen;
     int32_t readLen;
-    DWORD err;
+    DWORD temp;
     
     while (fileSize > 0) {
         needLen = (fileSize < bufLen ? fileSize : bufLen);
         
-        if (!read_pak_file(wf, buf, needLen * sizeof(char), (LPDWORD)&readLen)) {
-            fprintf(stderr, "[ERROR] %s: cannot read from \"%s\"\n", __func__, attr->fileName);
+        if (!win_file_read(wf, buf, needLen * sizeof(char), &temp)) {
+            log_error("%s, %d: win_file_read failed", __func__, __LINE__);
             return false;
         }
         
+        readLen = (int32_t)temp;
         decode_bytes(buf, buf, readLen);
         
         if (!WriteFile(hFile, buf, readLen, NULL, NULL)) {
-            err = GetLastError();
-            fprintf(stderr, "[ERROR] %s: cannot write to \"%s\": %ld, %s\n", __func__, attr->fileName, err, format_windows_error_code(err));
+            DWORD err = GetLastError();
+            log_win_error(err, "%s, %d: WriteFile failed on \"%s\"", __func__, __LINE__, attr->name);
             return false;
         }
 
@@ -610,37 +586,32 @@ bool save_single_file_data(const FileAttr* attr, WinFile* wf, HANDLE hFile, char
     }
     
     if (!SetFileTime(hFile, NULL, NULL, &(attr->lastWriteTime))) {
-        err = GetLastError();
-        fprintf(stderr, "[ERROR] %s: cannot set the last write time to \"%s\": %ld, %s\n", __func__, attr->fileName, err, format_windows_error_code(err));
+        DWORD err = GetLastError();
+        log_win_error(err, "%s, %d: SetFileTime failed on \"%s\"", __func__, __LINE__, attr->name);
         return false;
     }
     
     return true;
 }
 
-bool extract_single_file(const FileAttr* attr, WinFile* wf, const char* extractDir, char* buf, int32_t bufLen) {
-    PPE_ASSERT(attr != NULL);
-    PPE_ASSERT(wf != NULL);
-    PPE_ASSERT(extractDir != NULL);
-    PPE_ASSERT(buf != NULL);
-    
+bool parse_single_file(FileAttr* attr, WinFile* wf, const char* extractDir, char* buf, int32_t bufLen) {
     char path[MAX_PATH];
-    build_complete_path(path, extractDir, attr->fileName);
+    build_complete_path(path, extractDir, attr->name);
     
     if (!recursive_create_parent_dirs(path)) {
-        fprintf(stderr, "[ERROR] %s: cannot create parent dir of \"%s\"\n", __func__, attr->fileName);
+        log_error("%s, %d: recursive_create_parent_dirs failed on \"%s\"", __func__, __LINE__, path);
         return false;
     }
     
     HANDLE hFile = CreateFile(path, GENERIC_WRITE, 0, NULL, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
     if (hFile == INVALID_HANDLE_VALUE) {
         DWORD err = GetLastError();
-        fprintf(stderr, "[ERROR] %s: cannot create a file named \"%s\": %ld, %s\n", __func__, path, err, format_windows_error_code(err));
+        log_win_error(err, "%s, %d: CreateFile failed on \"%s\"\n", __func__, __LINE__, path);
         return false;
     }
     
     if (!save_single_file_data(attr, wf, hFile, buf, bufLen)) {
-        fprintf(stderr, "[ERROR] %s: save the data of \"%s\" failed\n", __func__, attr->fileName);
+        log_error("%s, %d: save_single_file_data failed on \"%s\"", __func__, __LINE__, path);
         CloseHandle(hFile);
         return false;
     }
@@ -649,24 +620,20 @@ bool extract_single_file(const FileAttr* attr, WinFile* wf, const char* extractD
     return true;
 }
 
-bool extract_inner_files(PakHeader* ph, WinFile* wf, const char* extractDir) {
-    PPE_ASSERT(ph != NULL);
-    PPE_ASSERT(wf != NULL);
-    PPE_ASSERT(extractDir != NULL);
-    
-    printf("[INFO] extract inner files\n");
+bool parse_body(Extractor* ext, const char* extractDir) {
+    printf("========= parse body =========\n");
     
     int32_t buf_size = 65536;
     char* buf = (char*)malloc(buf_size * sizeof(char));
     if (buf == NULL) {
-        fprintf(stderr, "[ERROR] %s: no enough memory to create a read buffer\n", __func__);
+        log_error("%s, %d: malloc failed\n", __func__, __LINE__);
         return false;
     }
     
-    const FileAttr* cursor = ph->attrList->head->next;
+    FileAttr* cursor = ext->attrList->head->next;
     while (cursor != NULL) {
-        if (!extract_single_file(cursor, wf, extractDir, buf, buf_size)) {
-            fprintf(stderr, "[ERROR] %s: extract the data of \"%s\" failed\n", __func__, cursor->fileName);
+        if (!parse_single_file(cursor, ext->pakFile, extractDir, buf, buf_size)) {
+            log_error("%s, %d: parse_single_file failed\n", __func__, __LINE__);
             free(buf);
             return false;
         }
@@ -675,7 +642,7 @@ bool extract_inner_files(PakHeader* ph, WinFile* wf, const char* extractDir) {
     }
     
     free(buf);
-    printf("[INFO] extract inner files to dir \"%s\" success\n", extractDir);
+    printf("[INFO] body data has been written to dir \"%s\" success\n", extractDir);
     return true;
 }
 
@@ -686,38 +653,29 @@ int main(int argc, char* argv[]) {
     }
     
     if (is_dir_exist(argv[2])) {
-        fprintf(stderr, "[ERROR] given dir: \"%s\" is already existed\n", argv[2]);
+        fprintf(stderr, "given dir: \"%s\" is already existed\n", argv[2]);
         return 1;
     }
     
-    WinFile* wf = open_pak_file(argv[1]);
-    if (wf == NULL) {
-        fprintf(stderr, "[ERROR] cannot open \"%s\" as a valid .pak file, stop\n", argv[1]);
+    Extractor* ext = create_extractor(argv[1]);
+    if (ext == NULL) {
+        log_error("create_extractor failed");
         return 1;
     }
     
-    PakHeader* ph = create_pak_header();
-    if (ph == NULL) {
-        fprintf(stderr, "[ERROR] cannot create a .pak header object, stop\n");
-        goto final_clean_pak_file;
+    if (!parse_header(ext)) {
+        log_error("parse_header failed");
+        destroy_extractor(ext);
+        return 1;
     }
     
-    if (!parse_header(ph, wf)) {
-        fprintf(stderr, "[ERROR] process meets error, stop\n");
-        goto final_clean_pak_header;
+    if (!parse_body(ext, argv[2])) {
+        log_error("parse_body failed");
+        destroy_extractor(ext);
+        return 1;
     }
     
-    save_file_attr_list(ph);
-    
-    if (!extract_inner_files(ph, wf, argv[2])) {
-        fprintf(stderr, "[ERROR] process meets error, stop\n");
-        goto final_clean_pak_header;
-    }
-    
-final_clean_pak_header:
-    destroy_pak_header(ph);
-final_clean_pak_file:
-    close_pak_file(wf);
-    
+    save_file_attr_list(ext);
+    destroy_extractor(ext);
     return 0;
 }
