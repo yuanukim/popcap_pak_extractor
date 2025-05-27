@@ -30,7 +30,6 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <stdarg.h>
-#include <string.h>
 #include <time.h>
 
 #define BYTES_OF_MAGIC       4
