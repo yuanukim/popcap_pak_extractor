@@ -642,7 +642,7 @@ bool parse_body(Extractor* ext, const char* extractDir) {
     }
     
     free(buf);
-    printf("[INFO] body data has been written to dir \"%s\" success\n", extractDir);
+    printf("[INFO] body data write to dir \"%s\" success\n", extractDir);
     return true;
 }
 
