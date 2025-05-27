@@ -218,8 +218,8 @@ void destroy_win_file(WinFile* wf) {
 }
 
 /*
-    read from the WinFile object.
-    return INVALID_FILE_SIZE means error, else return the read length.
+    read from the WinFile.
+    if readLen is not NULL, then readLen will be set to the actual read length.
 */
 bool win_file_read(WinFile* wf, char* buf, DWORD numOfBytesToRead, DWORD* readLen) {
     if (wf->size < numOfBytesToRead) {
