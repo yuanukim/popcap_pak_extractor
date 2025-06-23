@@ -64,42 +64,66 @@ struct Header {
     std::vector<FileAttr> fileAttrList;
 };
 
-class SystemError : public std::runtime_error {
-    std::string get_win_err_msg(DWORD errCode) {
-        return std::system_category().message(static_cast<int>(errCode));
+class GlobalException {
+    std::string errMsg;
+    std::source_location sl;
+public:
+    explicit GlobalException(const std::string& msg, std::source_location _sl = std::source_location::current()) 
+        : errMsg{ msg }, sl{ std::move(_sl) }
+    {}
+
+    virtual const char* what() const noexcept {
+        return errMsg.c_str();
     }
 
-    std::string build_err_msg(DWORD errCode, const std::string& msg, const std::source_location& loc) {
-        return std::format("file: {}, func: {}, line: {}, {}, windows code: {}, {}", loc.file_name(), loc.function_name(), loc.line(), msg, errCode, get_win_err_msg(errCode));
+    auto file_name() const noexcept {
+        return sl.file_name();
     }
+
+    auto func_name() const noexcept {
+        return sl.function_name();
+    }
+
+    auto line() const noexcept {
+        return sl.line();
+    }
+
+    auto column() const noexcept {
+        return sl.column();
+    }
+}; 
+
+class SystemError : public GlobalException {
+    DWORD errCode;
 public:
-    SystemError(DWORD errCode, const std::string& msg, const std::source_location& loc = std::source_location::current())
-        : std::runtime_error{ build_err_msg(errCode, msg, loc) }
+    SystemError(DWORD _errCode, const std::string& msg, std::source_location _sl = std::source_location::current()) 
+        : errCode { _errCode }, GlobalException{ msg, std::move(_sl) }
+    {}
+
+    std::string system_error_msg() const {
+        return std::system_category().message(static_cast<int>(errCode));
+    }
+};
+
+class InvalidPakMagic : public GlobalException {
+public:
+    InvalidPakMagic(std::source_location _sl = std::source_location::current()) 
+        : GlobalException{ "Invalid pak magic", std::move(_sl) }
     {}
 };
 
-class InvalidPakMagic : public std::runtime_error {
-    std::string build_err_msg(const std::source_location& loc) {
-        return std::format("file: {}, func: {}, line: {}, invalid .pak magic", loc.file_name(), loc.function_name(), loc.line());
-    }
+class InvalidPakVersion : public GlobalException {
 public:
-    InvalidPakMagic(const std::source_location& loc = std::source_location::current()) : std::runtime_error{ build_err_msg(loc) } {}
+    InvalidPakVersion(std::source_location _sl = std::source_location::current()) 
+        : GlobalException{ "Invalid pak version", std::move(_sl) }
+    {}
 };
 
-class InvalidPakVersion : public std::runtime_error {
-    std::string build_err_msg(const std::source_location& loc) {
-        return std::format("file: {}, func: {}, line: {}, invalid .pak version", loc.file_name(), loc.function_name(), loc.line());
-    }
+class FileBrokenException : public GlobalException {
 public:
-    InvalidPakVersion(const std::source_location& loc = std::source_location::current()) : std::runtime_error{ build_err_msg(loc) } {}
-};
-
-class FileBrokenException : public std::runtime_error {
-    std::string build_err_msg(const std::string& msg, const std::source_location& loc) {
-        return std::format("file: {}, func: {}, line: {}, {}, file maybe broken", loc.file_name(), loc.function_name(), loc.line(), msg);
-    }
-public:
-    FileBrokenException(const std::string& msg, const std::source_location& loc = std::source_location::current()) : std::runtime_error { build_err_msg(msg, loc) } {}
+    FileBrokenException(const std::string& msg, std::source_location _sl = std::source_location::current()) 
+        : GlobalException{ msg, std::move(_sl) }
+    {}
 };
 
 class PakFile {
@@ -219,21 +243,21 @@ class PakExtractor {
     }
 
     void parse_header(PakFile& pakFile) {
-        std::cout << "parse magic.\n";
+        std::cout << "[INFO] parse magic.\n";
         parse_magic(pakFile);
 
         if (!check_magic()) {
             throw InvalidPakMagic{};
         }
 
-        std::cout << "parse version.\n";
+        std::cout << "[INFO] parse version.\n";
         parse_version(pakFile);
 
         if (!check_version()) {
             throw InvalidPakVersion{};
         }
 
-        std::cout << "parse all file attributes.\n";
+        std::cout << "[INFO] parse all file attributes.\n";
         while (true) {
             if (reach_header_end(pakFile)) {
                 break;
@@ -276,12 +300,12 @@ class PakExtractor {
     }
 
     void save_file_attributes() {
-        std::cout << "save file attributes.\n";
+        std::cout << "[INFO] save file attributes.\n";
 
         constexpr const char* savPath = "pak_file_attributes.txt";
         std::ofstream out{ savPath };
         if (!out.is_open()) {
-            std::cerr << std::format("cannot save file attributes to \"{}\".\n", savPath);
+            std::cerr << std::format("[ERROR] cannot save file attributes to \"{}\".\n", savPath);
             return;
         }
 
@@ -290,7 +314,7 @@ class PakExtractor {
         }
 
         out.close();
-        std::cout << std::format("save file attributes to file \"{}\" success.\n", savPath);
+        std::cout << std::format("[INFO] save file attributes to file \"{}\" success.\n", savPath);
     }
 
     /*
@@ -360,15 +384,15 @@ class PakExtractor {
         }
     }
 public:
-    void operator()(PakFile& pakFile, const std::string& rootPath) {
+    void start_parse(PakFile& pakFile, const std::string& rootPath) {
         parse_header(pakFile);
-        std::cout << std::format("parse header success, the number of the file attributes is {}.\n", header.fileAttrList.size());
+        std::cout << std::format("[INFO] parse header success, the number of the file attributes is {}.\n", header.fileAttrList.size());
 
         save_file_attributes();
 
-        std::cout << "extract inner files.\n";
+        std::cout << "[INFO] extract inner files.\n";
         extract_inner_files(pakFile, rootPath);
-        std::cout << std::format("extract inner files to dir \"{}\" success.\n", rootPath);
+        std::cout << std::format("[INFO] extract inner files to dir \"{}\" success.\n", rootPath);
     }
 };
 
@@ -379,7 +403,7 @@ int main(int argc, char* argv[]) {
     }
 
     if (fs::is_directory(argv[2])) {
-        std::cerr << std::format("dir: {} is already exists.\n", argv[2]);
+        std::cerr << std::format("[ERROR] dir: {} is already exists.\n", argv[2]);
         return 1;
     }
 
@@ -387,10 +411,19 @@ int main(int argc, char* argv[]) {
     PakExtractor pe;
 
     try {
-        pe(pakFile, argv[2]);
+        pe.start_parse(pakFile, argv[2]);
+    }
+    catch(const SystemError& se) {
+        std::cerr << "[ERROR] " << se.func_name() << ", " << se.line() << ": system error, " << se.what() << ", " << se.system_error_msg() << "\n";
+    }
+    catch(const GlobalException& ge) {
+        std::cerr << "[ERROR] " << ge.func_name() << ", " << ge.line() << ": global error, " << ge.what() << "\n";
     }
     catch(const std::exception& e) {
-        std::cerr << e.what() << ".\n";
+        std::cerr << "[ERROR] standard error, " << e.what() << "\n";
+    }
+    catch(...) {
+        std::cerr << "[ERROR] unknown error\n";
     }
 
     return 0;
